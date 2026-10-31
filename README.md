@@ -10,6 +10,19 @@ This is an open-source rebuild of the pattern behind a triage agent I built duri
 Allegis Global Solutions on Snowflake Cortex. None of that code or data is here. This version is
 written from scratch, runs anywhere, and ships with its own eval suite.
 
+## In plain words
+
+A data pipeline is a chain of jobs that move data from one place to another. When one job breaks, a dashboard
+several steps downstream goes wrong, and someone has to work out which job actually failed. This project does
+that detective work automatically.
+
+* It starts at the broken report and walks upstream, skipping healthy jobs, until it finds the real culprit.
+* It searches past incidents for similar cases and drafts a fix.
+* It never applies the fix on its own. A person approves or rejects it first.
+* When the evidence is ambiguous, it hands the case to a person instead of guessing.
+
+It is my own version of the triage agent I worked on at Allegis, with tests and evals that block a bad change from merging.
+
 ```
 intake → tracer → analyst → precedent → classifier → orchestrator → reviewer
                                                                       │
