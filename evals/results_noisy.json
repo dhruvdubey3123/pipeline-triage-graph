@@ -1,0 +1,106 @@
+{
+  "incidents": 100,
+  "root_accuracy": 1.0,
+  "cause_accuracy": 1.0,
+  "category_accuracy": 0.811,
+  "action_accuracy": 0.95,
+  "escalation_recall": 0.808,
+  "false_escalation_rate": 0.0,
+  "mean_nodes_checked": 7.23,
+  "pipeline_nodes": 12,
+  "p50_latency_ms": 9.3,
+  "p95_latency_ms": 12.2,
+  "mode": "offline rules (no LLM)",
+  "failures": [
+    {
+      "id": "SYN-028",
+      "expected": {
+        "fix_targets": [
+          "sp_vendor_rollup"
+        ],
+        "cause": null,
+        "category": "unknown",
+        "expected_action": "escalate",
+        "ambiguous": false
+      },
+      "got": {
+        "fix_target": "sp_vendor_rollup",
+        "category": "missed_load",
+        "action": "propose",
+        "review_issues": []
+      }
+    },
+    {
+      "id": "SYN-050",
+      "expected": {
+        "fix_targets": [
+          "sp_vendor_rollup"
+        ],
+        "cause": null,
+        "category": "unknown",
+        "expected_action": "escalate",
+        "ambiguous": false
+      },
+      "got": {
+        "fix_target": "sp_vendor_rollup",
+        "category": "permission",
+        "action": "propose",
+        "review_issues": []
+      }
+    },
+    {
+      "id": "SYN-081",
+      "expected": {
+        "fix_targets": [
+          "sp_merge_cases"
+        ],
+        "cause": null,
+        "category": "unknown",
+        "expected_action": "escalate",
+        "ambiguous": false
+      },
+      "got": {
+        "fix_target": "sp_merge_cases",
+        "category": "schema_drift",
+        "action": "propose",
+        "review_issues": []
+      }
+    },
+    {
+      "id": "SYN-088",
+      "expected": {
+        "fix_targets": [
+          "sp_vendor_rollup"
+        ],
+        "cause": null,
+        "category": "unknown",
+        "expected_action": "escalate",
+        "ambiguous": false
+      },
+      "got": {
+        "fix_target": "sp_vendor_rollup",
+        "category": "permission",
+        "action": "propose",
+        "review_issues": []
+      }
+    },
+    {
+      "id": "SYN-091",
+      "expected": {
+        "fix_targets": [
+          "sp_fill_rate"
+        ],
+        "cause": null,
+        "category": "unknown",
+        "expected_action": "escalate",
+        "ambiguous": false
+      },
+      "got": {
+        "fix_target": "sp_fill_rate",
+        "category": "duplicate_merge",
+        "action": "propose",
+        "review_issues": []
+      }
+    }
+  ]
+}

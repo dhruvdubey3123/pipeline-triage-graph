@@ -1,0 +1,7 @@
+# Regression floors for the clean synthetic set. CI fails if a change drops below these.
+min:
+  root_accuracy: 0.98
+  category_accuracy: 0.95
+  escalation_recall: 0.95
+max:
+  false_escalation_rate: 0.05

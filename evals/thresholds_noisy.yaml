@@ -1,0 +1,8 @@
+# Floors for the noisy set (misleading secondary error lines). Set at the current measured
+# level so the known weakness cannot get worse silently. Raise them as the classifier improves.
+min:
+  root_accuracy: 0.98
+  category_accuracy: 0.78
+  escalation_recall: 0.78
+max:
+  false_escalation_rate: 0.05

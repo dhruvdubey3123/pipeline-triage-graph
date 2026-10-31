@@ -1,0 +1,16 @@
+{
+  "id": "INC-demo-1",
+  "symptom_node": "rpt_workforce",
+  "symptom": "Fill-rate tile reads 0% for every client since Tuesday",
+  "node_status": {
+    "rpt_workforce":   {"status": "stale"},
+    "fct_workforce":   {"status": "stale", "note": "fill_rate NULL on all rows since last refresh"},
+    "sp_merge_cases":  {"status": "ok"},
+    "load_cases":      {"status": "ok"},
+    "sp_fill_rate":    {"status": "failed", "error": "SQL compilation error: invalid identifier 'REQ_ID'"},
+    "load_timesheets": {"status": "changed", "changes": ["column REQ_ID renamed to REQUISITION_ID"]},
+    "src_timesheets":  {"status": "ok"},
+    "fct_spend":       {"status": "ok"}
+  },
+  "observations": {"fct_workforce": "fill_rate is NULL for every row loaded since the last successful run"}
+}

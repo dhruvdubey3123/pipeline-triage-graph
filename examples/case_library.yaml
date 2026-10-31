@@ -1,0 +1,17 @@
+# Resolved cases the precedent search draws from. The learn step appends to this file.
+- id: CASE-0001
+  category: schema_drift
+  summary: procedure failed with invalid identifier after upstream load renamed a column
+  resolution: update column reference in the procedure, add alias for back-compat, re-run affected window
+- id: CASE-0002
+  category: duplicate_merge
+  summary: fact table row count doubled after source started sending versioned history rows; MERGE key too narrow
+  resolution: widen MERGE key to include effective date, keep latest version, delete duplicates from last load
+- id: CASE-0003
+  category: missed_load
+  summary: load job timed out after source API throttling; downstream procedure skipped because upstream not ready
+  resolution: re-run load job with backfill from last success, then trigger dependent procedures
+- id: CASE-0004
+  category: permission
+  summary: procedure failed with insufficient privileges after role rotation
+  resolution: restore grant on the target schema to the service role, re-run procedure

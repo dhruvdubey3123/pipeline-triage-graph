@@ -1,0 +1,31 @@
+# Example pipeline: source systems -> ETL loads -> stored procedures -> fact tables -> BI report.
+# Names are generic. Swap in your own DAG (or generate it from your warehouse lineage).
+name: workforce-analytics
+nodes:
+  - {id: src_cases,        kind: source,    owner: ingestion}
+  - {id: src_timesheets,   kind: source,    owner: ingestion}
+  - {id: src_vendors,      kind: source,    owner: ingestion}
+  - {id: load_cases,       kind: load,      owner: data-eng}
+  - {id: load_timesheets,  kind: load,      owner: data-eng}
+  - {id: load_vendors,     kind: load,      owner: data-eng}
+  - {id: sp_merge_cases,   kind: procedure, owner: data-eng}
+  - {id: sp_fill_rate,     kind: procedure, owner: analytics-eng}
+  - {id: sp_vendor_rollup, kind: procedure, owner: analytics-eng}
+  - {id: fct_workforce,    kind: table,     owner: analytics-eng}
+  - {id: fct_spend,        kind: table,     owner: analytics-eng}
+  - {id: rpt_workforce,    kind: report,    owner: bi}
+edges:
+  - [src_cases, load_cases]
+  - [src_timesheets, load_timesheets]
+  - [src_vendors, load_vendors]
+  - [load_cases, sp_merge_cases]
+  - [load_cases, sp_fill_rate]
+  - [load_timesheets, sp_fill_rate]
+  - [load_vendors, sp_vendor_rollup]
+  - [sp_merge_cases, fct_workforce]
+  - [sp_fill_rate, fct_workforce]
+  - [sp_vendor_rollup, fct_spend]
+  - [fct_workforce, rpt_workforce]
+  - [fct_spend, rpt_workforce]
+# The fixer may never write to these directly; changes must go through the producing procedure.
+protected: [fct_workforce, fct_spend, rpt_workforce, src_cases, src_timesheets, src_vendors]

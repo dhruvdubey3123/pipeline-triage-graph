@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: triage-graph
+  labels: {app: triage-graph}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: triage-graph}}
+  template:
+    metadata: {labels: {app: triage-graph}}
+    spec:
+      securityContext: {runAsNonRoot: true}
+      containers:
+        - name: api
+          image: ghcr.io/dhruvdubey3123/pipeline-triage-graph:latest
+          ports: [{containerPort: 8000}]
+          envFrom: [{configMapRef: {name: triage-config}}]
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom: {secretKeyRef: {name: triage-secrets, key: anthropic-api-key, optional: true}}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          readinessProbe: {httpGet: {path: /healthz, port: 8000}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /healthz, port: 8000}, initialDelaySeconds: 10, periodSeconds: 20}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: triage-config}
+data:
+  TRIAGE_MIN_CONFIDENCE: "0.5"
+  TRIAGE_USE_LLM: "0"
+---
+apiVersion: v1
+kind: Service
+metadata: {name: triage-graph}
+spec:
+  selector: {app: triage-graph}
+  ports: [{port: 80, targetPort: 8000}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: triage-graph}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: triage-graph}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

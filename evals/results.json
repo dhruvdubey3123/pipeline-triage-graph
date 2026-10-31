@@ -1,0 +1,15 @@
+{
+  "incidents": 100,
+  "root_accuracy": 1.0,
+  "cause_accuracy": 1.0,
+  "category_accuracy": 1.0,
+  "action_accuracy": 1.0,
+  "escalation_recall": 1.0,
+  "false_escalation_rate": 0.0,
+  "mean_nodes_checked": 7.06,
+  "pipeline_nodes": 12,
+  "p50_latency_ms": 8.4,
+  "p95_latency_ms": 10.8,
+  "mode": "offline rules (no LLM)",
+  "failures": []
+}
