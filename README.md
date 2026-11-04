@@ -10,6 +10,10 @@ This is an open-source rebuild of the pattern behind a triage agent I built duri
 Allegis Global Solutions on Snowflake Cortex. None of that code or data is here. This version is
 written from scratch, runs anywhere, and ships with its own eval suite.
 
+![Triage demo: a schema change breaks the pipeline, the tracer walks upstream to the root cause, a person approves the fix](docs/demo.gif)
+
+Try it yourself in the [live demo on my portfolio](https://dhruvdubey3123.github.io/#triage): break any box, run triage, approve or reject the fix.
+
 ## In plain words
 
 A data pipeline is a chain of jobs that move data from one place to another. When one job breaks, a dashboard
