@@ -14,6 +14,15 @@ written from scratch, runs anywhere, and ships with its own eval suite.
 
 Try it yourself in the [live demo on my portfolio](https://dhruvdubey3123.github.io/#triage): break any box, run triage, approve or reject the fix.
 
+## Running inside the agent harness
+
+Triage stops at the human gate. What happens after approval, actually applying the fix, now runs inside
+[agent-harness-runtime](https://github.com/dhruvdubey3123/agent-harness-runtime#running-the-triage-agent-inside-the-harness) through this
+project's `Executor` interface. Every warehouse action is logged before and after it runs, so if the process is killed halfway
+through a fix, a new process finishes it without re-running a load or posting the ticket comment twice. Across the 75 approvable
+incidents in this repo's eval set, crashed at random points: restarting from scratch duplicated an action in 61 of 75 fixes;
+resuming through the harness duplicated none and applied every action exactly once in all 75.
+
 ## In plain words
 
 A data pipeline is a chain of jobs that move data from one place to another. When one job breaks, a dashboard
