@@ -165,6 +165,24 @@ class ChatModel(Protocol):
         """-> the assistant message: {"tool_calls": [...]} or {"content": "..."}"""
 
 
+def _rate_limited(r) -> bool:
+    """A hosted tier saying "slow down" (429) or "busy" (503). Not the model failing."""
+    return r.status_code in (429, 503)
+
+
+def _unparsable(r) -> bool:
+    """The provider could not turn the model's output into a tool call, and answered 400 instead of a
+    message. Seen with gpt-oss-120b on Groq. Nothing was executed, so the same question can be asked
+    again, and a sampled model usually gets it right the next time."""
+    return r.status_code == 400 and "could not be parsed" in (getattr(r, "text", "") or "")
+
+
+def _wait(r, attempt: int) -> float:
+    if _rate_limited(r):
+        return min(float(r.headers.get("retry-after") or 2 ** attempt * 2), 60.0)
+    return 0.5
+
+
 def _raise_with_body(r) -> None:
     """Raise with what the provider actually said: a hosted API answering 400 names the part of the
     request it rejected, and a bare status line turns that into guesswork."""
@@ -202,10 +220,8 @@ class OpenAICompatChat:
         for attempt in range(self.retries + 1):
             r = httpx.post(f"{self.base_url}/chat/completions", timeout=self.timeout,
                            headers={"Authorization": f"Bearer {self.api_key}"}, json=body)
-            # A hosted free tier answers "slow down" (429) or "busy" (503) under load. That is not the model
-            # failing, so it is waited out rather than counted as no answer, which would read as a wrong one.
-            if r.status_code in (429, 503) and attempt < self.retries:
-                time.sleep(min(float(r.headers.get("retry-after") or 2 ** attempt * 2), 60.0))
+            if attempt < self.retries and (_rate_limited(r) or _unparsable(r)):
+                time.sleep(_wait(r, attempt))
                 continue
             _raise_with_body(r)
             return r.json()["choices"][0]["message"]
