@@ -6,11 +6,18 @@ node that actually broke. Specialist agents then check the data, find similar pa
 the failure and draft a fix. A separate reviewer checks the proposal, and **nothing changes until a
 person approves it**.
 
-The root cause can be found two ways. The **tracer** walks the graph with fixed rules. The
-**investigator** is an LLM agent (local Qwen3 8B through Ollama by default) that walks the same graph
-itself through read-only tools and submits a diagnosis. When the investigator is on, the tracer runs
-after it as a cross-check, and if the two disagree on the root cause the incident goes to a person
-with both traces rather than to the approval gate.
+**How the work is split, and why.** In the original agent at Allegis, the traversal of the dependency graph was
+deterministic, a stored procedure, because a wrong root cause is expensive; the LLM was used to orchestrate and to
+communicate what the traversal found. This repo keeps that split by default:
+
+* the **tracer** walks the graph with fixed rules and decides the root cause;
+* the **communicator** (local Qwen3 8B through Ollama by default) writes the briefing the person at the approval gate
+  reads, from the tracer's findings only, and is checked against them before anyone sees it.
+
+It also measures the alternative Allegis chose not to ship: an **investigator**, an LLM agent that walks the graph itself
+through read-only tools. With it on, the tracer cross-checks the model's root cause and any disagreement goes to a
+person. On held-out incidents it found the root cause 13 times in 20 against the tracer's 20, which is the measured case
+for keeping the traversal deterministic.
 
 This is an open-source rebuild of the pattern behind a triage agent I built during my internship at
 Allegis Global Solutions on Snowflake Cortex. None of that code or data is here. This version is
@@ -19,6 +26,33 @@ written from scratch, runs anywhere, and ships with its own eval suite.
 ![Triage demo: a schema change breaks the pipeline, the tracer walks upstream to the root cause, a person approves the fix](docs/demo.gif)
 
 Try it yourself in the [live demo on my portfolio](https://dhruvdubey3123.github.io/#triage): break any box, run triage, approve or reject the fix.
+
+## The communicator: the LLM explains, the trace stays the facts
+
+```
+intake -> tracer -> analyst -> precedent -> classifier -> orchestrator -> reviewer -> communicator (LLM) -> [human gate]
+```
+
+`triage/communicator.py` gives the model the findings and nothing else: what the person saw, the path the tracer walked
+(including the branches it ruled out), the root cause and its upstream cause, the evidence, the closest resolved cases,
+the plan, and what the reviewer flagged. It writes three or four plain sentences for the person deciding. No tools.
+
+A fluent briefing can still mislead, so it is checked before it is shown:
+
+* **it may only name tables and jobs the trace touched or the plan changes**, so it cannot invent a step or point at a job
+  nobody examined;
+* **it has to name the root cause**, so the one fact the reader needs is never paraphrased away;
+* **it may not rename the failure** to a different category from the one the findings settled on.
+
+A briefing that fails is replaced by a template built from the same findings, and the reason is recorded, so the person
+always gets one and only a faithful one comes from the model. Escalated incidents get a briefing too, for the owner who
+picks them up. The traversal, the plan and the reviewer's decision are identical with or without it, which a test asserts.
+
+```bash
+python -m evals.run_eval --communicator --skip 60 --limit 20   # deterministic traversal, LLM briefing: the Allegis split
+```
+
+The eval reports how many briefings the model wrote that passed the check, how many fell back, and why.
 
 ## An LLM agent that walks the graph itself
 
@@ -105,14 +139,13 @@ that detective work automatically.
 It is my own version of the triage agent I worked on at Allegis, with tests and evals that block a bad change from merging.
 
 ```
-intake → [investigator] → tracer → analyst → precedent → classifier → orchestrator → reviewer
-                                                                      │
-                                       escalate ◄── blocked ──────────┤
-                                          │                           └── passed ──► [ human gate ]
-                                          │                                            │       │
-                                          │                               reject ◄─────┘       └─► approve → apply
-                                          ▼                                                              │
-                                        learn ◄──────────────────────────────────────────────────────────┘
+intake → [investigator] → tracer → analyst → precedent → classifier → orchestrator → reviewer → [communicator]
+
+    passed  → [ human gate ] → approve → apply    → learn
+                             → reject  → escalate → learn
+    blocked → escalate → learn
+
+    [ ] = only when a model is configured
 ```
 
 ## What each agent does
@@ -127,12 +160,14 @@ intake → [investigator] → tracer → analyst → precedent → classifier �
 | `classifier` | Assign a failure category | Rules by default; optional Claude call, validated against allowed categories |
 | `orchestrator` | Draft the fix and the re-run plan | Plan is computed from the DAG in topological order |
 | `reviewer` | Block unsafe or uncertain proposals | Protected nodes, unknown category, ambiguous trace, low confidence, plan touching the wrong node, investigator and tracer disagreeing |
+| `communicator` | LLM: write the briefing for the person deciding, from the findings only | Only when a model is configured. Checked against the trace; falls back to a template |
 | `gate` | Human approval | Graph is compiled with `interrupt_before=["gate"]`, so a run always stops here |
 | `apply` | Execute the plan | `DryRunExecutor` by default: records what it would do, does nothing |
 | `learn` | Append the case to the library | Next similar failure starts from this precedent |
 
 By default the tracer decides the root cause from structure, not from a model, and the eval numbers below are that path.
-With the investigator on, a model decides and the tracer checks it. Either way nothing is applied before a person approves.
+The communicator only explains; the investigator, when on, proposes and the tracer checks it. Either way nothing is
+applied before a person approves.
 
 ## Run it
 
@@ -177,8 +212,9 @@ Tools: `list_nodes`, `get_upstream`, `get_downstream`, `trace_failure`, `search_
 
 ### Optional LLM mode
 
-For the LLM investigator that walks the graph itself, see [above](#an-llm-agent-that-walks-the-graph-itself). The older,
-narrower mode below asks Claude only for the category and the wording of the fix:
+The communicator ([above](#the-communicator-the-llm-explains-the-trace-stays-the-facts)) replaces the wording half of
+this older mode with a checked briefing on a local model. The older mode below still asks Claude for the category and
+the wording of the fix:
 
 ```bash
 pip install -e ".[llm]"

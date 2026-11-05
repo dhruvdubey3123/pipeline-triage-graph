@@ -17,6 +17,10 @@ tools that walks the dependency graph itself and submits a diagnosis; its root c
 the plan, while the failure category stays with the rules.
 The tracer still runs after it, as a cross-check: if the two disagree on the root cause, the
 reviewer sends the incident to a person with both traces instead of to the approval gate.
+
+communicator, after the reviewer, is there only when a chat model is passed in. It is the role the
+LLM had in the original Allegis agent: the traversal stays deterministic, and the model writes the
+briefing the person reads, checked against the trace before it is shown (see triage/communicator.py).
 """
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from . import llm
+from .communicator import brief
 from .investigator import ChatModel, investigate
 from .adapters import DataProbe, DryRunExecutor, Executor, FixtureProbe
 from .dag import PipelineDAG, refresh_order, trace
@@ -58,6 +63,9 @@ class TriageState(TypedDict, total=False):
     investigation: dict            # the LLM investigator's calls and answer, when one is configured
     tracer_target: str | None      # what the rule-based tracer found, kept as a cross-check
     tracer_cause: str | None
+    briefing: str                  # what the person at the gate reads, when a communicator is configured
+    briefing_source: str           # "model" if it passed the faithfulness check, else "template"
+    briefing_problems: list[str]
 
 
 def _short(args: dict) -> str:
@@ -78,6 +86,7 @@ def build_graph(
     persist_learning: bool = False,
     investigator: ChatModel | None = None,
     investigator_steps: int = 14,
+    communicator: ChatModel | None = None,
 ):
     """investigator: a chat model with tool calling. When set, an LLM agent walks the dependency graph
     first and its diagnosis drives the plan; the rule-based tracer still runs, as a cross-check, and a
@@ -213,6 +222,13 @@ def build_graph(
         msg = "passed, waiting for human approval" if not issues else "blocked: " + "; ".join(issues)
         return {"review_issues": issues, "route": route, **_say("reviewer", msg)}
 
+    def communicator_node(s: TriageState) -> dict:
+        b = brief(s, dag, communicator)
+        note = ("briefing written by the model, checked against the trace" if b.source == "model" else
+                "model briefing not used (" + "; ".join(b.problems) + "), template briefing instead")
+        return {"briefing": b.text, "briefing_source": b.source, "briefing_problems": b.problems,
+                **_say("communicator", note)}
+
     def gate(s: TriageState) -> dict:
         d = s.get("human_decision")
         if d not in ("approve", "reject"):
@@ -242,6 +258,8 @@ def build_graph(
 
     g = StateGraph(TriageState)
     extra = [("investigator", investigator_node)] if investigator is not None else []
+    if communicator is not None:
+        extra.append(("communicator", communicator_node))
     for name, fn in [*extra, ("intake", intake), ("tracer", tracer), ("analyst", analyst), ("precedent", precedent),
                      ("classifier", classifier), ("orchestrator", orchestrator), ("reviewer", reviewer),
                      ("gate", gate), ("apply", apply), ("escalate", escalate), ("learn", learn)]:
@@ -251,7 +269,11 @@ def build_graph(
     for a, b in [*head, ("tracer", "analyst"), ("analyst", "precedent"),
                  ("precedent", "classifier"), ("classifier", "orchestrator"), ("orchestrator", "reviewer")]:
         g.add_edge(a, b)
-    g.add_conditional_edges("reviewer", lambda s: s["route"], {"gate": "gate", "escalate": "escalate"})
+    decider = "reviewer"
+    if communicator is not None:      # the briefing is written for whoever decides next: approver or owner
+        g.add_edge("reviewer", "communicator")
+        decider = "communicator"
+    g.add_conditional_edges(decider, lambda s: s["route"], {"gate": "gate", "escalate": "escalate"})
     g.add_conditional_edges("gate", lambda s: "apply" if s.get("human_decision") == "approve" else "escalate",
                             {"apply": "apply", "escalate": "escalate"})
     g.add_edge("apply", "learn")

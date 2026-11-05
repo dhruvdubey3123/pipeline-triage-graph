@@ -179,7 +179,7 @@ class OpenAICompatChat:
 
         r = httpx.post(f"{self.base_url}/chat/completions", timeout=self.timeout,
                        headers={"Authorization": f"Bearer {self.api_key}"},
-                       json={"model": self.model, "messages": messages, "tools": tools,
+                       json={"model": self.model, "messages": messages, **({"tools": tools} if tools else {}),
                              "temperature": 0.0, "stream": False})
         r.raise_for_status()
         return r.json()["choices"][0]["message"]
