@@ -314,4 +314,21 @@ triage/llm.py         optional Claude calls
 evals/                generator, runner, thresholds, committed data
 ```
 
+## Scope and future work
+
+**In scope, deliberately.** The incidents are synthetic, generated with labels so every claim is measurable, and the pipeline
+is a 12-node example. That is the scope of this project, not a gap in it: the point is the design (deterministic decisions,
+an LLM that orchestrates and explains inside checks) and numbers anyone can rerun.
+
+**Future scope 1: the LLM drafts the actual fix.** Today the fix text comes from a template per failure category; the model
+explains it but does not write it. The next step is a drafting agent that proposes the change itself, the edit to the
+procedure's SQL, for a person to review. It needs ground truth first: procedure code and a reference fix for each labelled
+incident, so a draft can be scored rather than admired. Until then it would be an unmeasured claim, so it is not built.
+
+**Future scope 2: a real pipeline in production.** Probes and the executor are already interfaces (`triage/adapters.py`):
+point `DataProbe` at warehouse queries (for example Snowflake semantic views), `Executor` at the scheduler's API, and run the
+service behind the existing FastAPI and MCP endpoints with the Kubernetes manifests in `k8s/`. Applying fixes would go through
+[agent-harness-runtime (Keel)](https://github.com/dhruvdubey3123/agent-harness-runtime#scope-and-future-work), which owns that
+side.
+
 MIT licensed.
