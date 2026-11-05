@@ -110,7 +110,7 @@ The model decides where to look. Around it:
 ```bash
 ollama pull qwen3:8b
 pip install -e ".[local]"
-python -m evals.run_eval --investigator --skip 60 --limit 20   # TRIAGE_MODEL / TRIAGE_BASE_URL to override
+python -m evals.run_eval --investigator --skip 60 --limit 20   # TRIAGE_MODEL / TRIAGE_BASE_URL / TRIAGE_API_KEY to override
 ```
 
 ### Measured: Qwen3 8B on incidents 41 to 60

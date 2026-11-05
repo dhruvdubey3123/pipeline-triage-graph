@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -175,14 +176,23 @@ class OpenAICompatChat:
         # Per request. A small local model thinking at length on a laptop can take minutes, so it is
         # configurable; when it is exceeded the step treats the model as unavailable rather than failing.
         self.timeout = timeout or float(os.environ.get("TRIAGE_TIMEOUT", "300"))
+        self.retries = int(os.environ.get("TRIAGE_RETRIES", "6"))
 
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
         import httpx  # imported here so the rules-only path has no dependency on it
 
-        r = httpx.post(f"{self.base_url}/chat/completions", timeout=self.timeout,
-                       headers={"Authorization": f"Bearer {self.api_key}"},
-                       json={"model": self.model, "messages": messages, **({"tools": tools} if tools else {}),
-                             "temperature": 0.0, "stream": False})
+        body = {"model": self.model, "messages": messages, **({"tools": tools} if tools else {}),
+                "temperature": 0.0, "stream": False}
+        for attempt in range(self.retries + 1):
+            r = httpx.post(f"{self.base_url}/chat/completions", timeout=self.timeout,
+                           headers={"Authorization": f"Bearer {self.api_key}"}, json=body)
+            # A hosted free tier answers "slow down" (429) or "busy" (503) under load. That is not the model
+            # failing, so it is waited out rather than counted as no answer, which would read as a wrong one.
+            if r.status_code in (429, 503) and attempt < self.retries:
+                time.sleep(min(float(r.headers.get("retry-after") or 2 ** attempt * 2), 60.0))
+                continue
+            r.raise_for_status()
+            return r.json()["choices"][0]["message"]
         r.raise_for_status()
         return r.json()["choices"][0]["message"]
 

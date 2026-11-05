@@ -144,6 +144,8 @@ def test_the_http_client_speaks_the_openai_tool_calling_shape(monkeypatch):
     seen = {}
 
     class R:
+        status_code, headers = 200, {}
+
         def raise_for_status(self):
             pass
 
@@ -200,3 +202,26 @@ def test_the_request_timeout_is_configurable(monkeypatch):
     from triage.investigator import OpenAICompatChat
     monkeypatch.setenv("TRIAGE_TIMEOUT", "900")
     assert OpenAICompatChat().timeout == 900.0
+
+
+def test_a_rate_limited_free_tier_is_waited_out_not_counted_as_no_answer(monkeypatch):
+    import httpx
+
+    import triage.investigator as inv
+    from triage.investigator import OpenAICompatChat
+    replies = [429, 503, 200]
+
+    class R:
+        def __init__(self, code):
+            self.status_code, self.headers = code, {"retry-after": "0"}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError("err", request=None, response=None)
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: R(replies.pop(0)))
+    monkeypatch.setattr(inv.time, "sleep", lambda s: None)
+    assert OpenAICompatChat().chat([{"role": "user", "content": "hi"}], []) == {"content": "ok"}
