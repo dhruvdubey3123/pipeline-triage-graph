@@ -342,11 +342,14 @@ procedure's SQL, for a person to review. It needs ground truth first: procedure 
 incident, so a draft can be scored rather than admired. Until then it would be an unmeasured claim, so it is not built.
 
 **What "it worked" means here.** The eval scores the diagnosis against labels: the right root cause, the right category, the
-right decision about whether a person should see it. Whether applying the plan actually repaired the pipeline is not scored
-anywhere, because the executor writes to a stand-in rather than a warehouse that can be stale or fresh. Applying the plan
-faithfully is measured, in
-[agent-harness-runtime (Keel)](https://github.com/dhruvdubey3123/agent-harness-runtime#every-guarantee-against-a-real-model);
-confirming the report came back is what the production scope below adds.
+right decision about whether a person should see it. The two questions after that are both measured, but in the project that
+owns them. Applying the plan faithfully, the right actions exactly once through a crash, is in
+[agent-harness-runtime (Keel)](https://github.com/dhruvdubey3123/agent-harness-runtime#every-guarantee-against-a-real-model).
+Whether the incident was then resolved, the broken report fresh again rather than the plan merely finished, is measured there
+too, by replaying the applied actions against the pipeline's structure: all 75 approved plans resolve their incident, and a
+plan aimed at the wrong node or missing a downstream refresh does not. What neither project can check is whether the SQL in a
+fix is correct, because the fix is a line of text rather than code that runs. That needs a real warehouse, which is the
+production scope below.
 
 **Future scope 2: a real pipeline in production.** Probes and the executor are already interfaces (`triage/adapters.py`):
 point `DataProbe` at warehouse queries (for example Snowflake semantic views), `Executor` at the scheduler's API, and run the
