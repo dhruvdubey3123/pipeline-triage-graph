@@ -1,6 +1,6 @@
 """The triage graph.
 
-    intake -> tracer -> analyst -> precedent -> classifier -> orchestrator -> reviewer
+    intake -> [investigator] -> tracer -> analyst -> precedent -> classifier -> orchestrator -> reviewer
                                                                               |
                                               escalate <------ (blocked) -----+---- (passed) ---> [human gate]
                                                   |                                                  |
@@ -11,6 +11,11 @@
 
 The graph is compiled with interrupt_before=["gate"], so a run always pauses before any
 change is made. A person resumes it with approve or reject (see TriageService.decide).
+
+[investigator] is there only when a chat model is passed in. It is an LLM agent with read-only
+tools that walks the dependency graph itself and submits a diagnosis, which then drives the plan.
+The tracer still runs after it, as a cross-check: if the two disagree on the root cause, the
+reviewer sends the incident to a person with both traces instead of to the approval gate.
 """
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from . import llm
+from .investigator import ChatModel, investigate
 from .adapters import DataProbe, DryRunExecutor, Executor, FixtureProbe
 from .dag import PipelineDAG, refresh_order, trace
 from .knowledge import Case, CaseLibrary, classify, confidence, draft_fix
@@ -48,6 +54,13 @@ class TriageState(TypedDict, total=False):
     applied: list[str]
     outcome: Literal["resolved", "escalated"]
     learned_case: str | None
+    investigation: dict            # the LLM investigator's calls and answer, when one is configured
+    tracer_target: str | None      # what the rule-based tracer found, kept as a cross-check
+    tracer_cause: str | None
+
+
+def _short(args: dict) -> str:
+    return ", ".join(f"{k}={str(v)[:40]!r}" for k, v in (args or {}).items())
 
 
 def _say(agent: str, msg: str) -> dict:
@@ -62,7 +75,12 @@ def build_graph(
     checkpointer: Any | None = None,
     min_confidence: float = 0.5,
     persist_learning: bool = False,
+    investigator: ChatModel | None = None,
+    investigator_steps: int = 14,
 ):
+    """investigator: a chat model with tool calling. When set, an LLM agent walks the dependency graph
+    first and its diagnosis drives the plan; the rule-based tracer still runs, as a cross-check, and a
+    disagreement on the root cause goes to a person instead of to the approval gate."""
     probe = probe or FixtureProbe()
     executor = executor or DryRunExecutor()
 
@@ -71,6 +89,15 @@ def build_graph(
         if inc.get("symptom_node") not in dag.nodes:
             raise ValueError(f"symptom_node {inc.get('symptom_node')!r} is not in pipeline {dag.name}")
         return _say("intake", f"{inc.get('id', 'incident')}: {inc.get('symptom', '')} (at {inc['symptom_node']})")
+
+    def investigator_node(s: TriageState) -> dict:
+        inv = investigate(s["incident"], dag, library, investigator, max_steps=investigator_steps)
+        lines = [{"agent": "investigator", "msg": f"{st['tool']}({_short(st['args'])}) -> "
+                  + ("ok" if st["ok"] else st["result"])} for st in inv.steps]
+        lines.append({"agent": "investigator", "msg": (
+            f"diagnosis: fix {inv.fix_target} ({inv.category}), cause {inv.cause or 'none named'}: {inv.reason}"
+            if inv.submitted else f"no diagnosis submitted after {len(inv.steps)} calls")})
+        return {"investigation": vars(inv), "log": lines}
 
     def tracer(s: TriageState) -> dict:
         inc = s["incident"]
@@ -87,6 +114,16 @@ def build_graph(
         else:
             tail = "no unhealthy upstream node found"
         lines.append({"agent": "tracer", "msg": tail})
+        inv = s.get("investigation")
+        if inv is not None:
+            agree = inv["submitted"] and inv["fix_target"] == res.fix_target
+            lines.append({"agent": "tracer", "msg": "cross-check: " + (
+                "agrees with the investigator" if agree else
+                f"investigator says {inv['fix_target']}, tracer says {res.fix_target}")})
+            return {"hops": hops, "fix_target": inv["fix_target"] if inv["submitted"] else None,
+                    "upstream_cause": (inv["cause"] or None) if inv["submitted"] else None,
+                    "ambiguous": res.ambiguous, "tracer_target": res.fix_target,
+                    "tracer_cause": res.upstream_cause, "log": lines}
         return {"hops": hops, "fix_target": res.fix_target, "upstream_cause": res.upstream_cause,
                 "ambiguous": res.ambiguous, "log": lines}
 
@@ -116,6 +153,11 @@ def build_graph(
     def classifier(s: TriageState) -> dict:
         root_status = s["incident"].get("node_status", {}).get(s.get("fix_target") or "", {}).get("status")
         cat, signals = classify(s.get("evidence", ""), root_status)
+        inv = s.get("investigation")
+        if inv is not None and inv["submitted"]:
+            if inv["category"] != cat:
+                signals.append(f"investigator said {inv['category']}; rules said {cat}")
+            cat = inv["category"]
         if llm.enabled():
             llm_cat = llm.classify(s.get("evidence", ""), s.get("precedents", []))
             if llm_cat and llm_cat != cat:
@@ -142,6 +184,12 @@ def build_graph(
     def reviewer(s: TriageState) -> dict:
         issues: list[str] = []
         target = s.get("fix_target")
+        inv = s.get("investigation")
+        if inv is not None and not inv["submitted"]:
+            issues.append("the investigator submitted no diagnosis")
+        elif inv is not None and s.get("tracer_target") != target:
+            issues.append(f"investigator and tracer disagree on the root cause ({target} vs "
+                          f"{s.get('tracer_target')}); a person should decide from both traces")
         if not target:
             issues.append("no root cause")
         elif target in dag.protected:
@@ -190,12 +238,14 @@ def build_graph(
         return {"learned_case": cid, **_say("learn", f"added {cid} to case library")}
 
     g = StateGraph(TriageState)
-    for name, fn in [("intake", intake), ("tracer", tracer), ("analyst", analyst), ("precedent", precedent),
+    extra = [("investigator", investigator_node)] if investigator is not None else []
+    for name, fn in [*extra, ("intake", intake), ("tracer", tracer), ("analyst", analyst), ("precedent", precedent),
                      ("classifier", classifier), ("orchestrator", orchestrator), ("reviewer", reviewer),
                      ("gate", gate), ("apply", apply), ("escalate", escalate), ("learn", learn)]:
         g.add_node(name, fn)
     g.add_edge(START, "intake")
-    for a, b in [("intake", "tracer"), ("tracer", "analyst"), ("analyst", "precedent"),
+    head = [("intake", "investigator"), ("investigator", "tracer")] if investigator is not None else [("intake", "tracer")]
+    for a, b in [*head, ("tracer", "analyst"), ("analyst", "precedent"),
                  ("precedent", "classifier"), ("classifier", "orchestrator"), ("orchestrator", "reviewer")]:
         g.add_edge(a, b)
     g.add_conditional_edges("reviewer", lambda s: s["route"], {"gate": "gate", "escalate": "escalate"})

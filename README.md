@@ -6,6 +6,12 @@ node that actually broke. Specialist agents then check the data, find similar pa
 the failure and draft a fix. A separate reviewer checks the proposal, and **nothing changes until a
 person approves it**.
 
+The root cause can be found two ways. The **tracer** walks the graph with fixed rules. The
+**investigator** is an LLM agent (local Qwen3 8B through Ollama by default) that walks the same graph
+itself through read-only tools and submits a diagnosis. When the investigator is on, the tracer runs
+after it as a cross-check, and if the two disagree on the root cause the incident goes to a person
+with both traces rather than to the approval gate.
+
 This is an open-source rebuild of the pattern behind a triage agent I built during my internship at
 Allegis Global Solutions on Snowflake Cortex. None of that code or data is here. This version is
 written from scratch, runs anywhere, and ships with its own eval suite.
@@ -13,6 +19,44 @@ written from scratch, runs anywhere, and ships with its own eval suite.
 ![Triage demo: a schema change breaks the pipeline, the tracer walks upstream to the root cause, a person approves the fix](docs/demo.gif)
 
 Try it yourself in the [live demo on my portfolio](https://dhruvdubey3123.github.io/#triage): break any box, run triage, approve or reject the fix.
+
+## An LLM agent that walks the graph itself
+
+```
+intake -> investigator (LLM, read-only tools) -> tracer (rules, cross-check) -> ... -> reviewer -> [human gate]
+```
+
+`triage/investigator.py` gives the model five tools and nothing that writes:
+
+| Tool | What it returns |
+|---|---|
+| `pipeline()` | every node, its kind, what it reads from, and which tables are protected |
+| `status(node)` | what the incident reports about that node: failed, stale, changed, ok |
+| `upstream(node)` | every node it depends on, nearest first, each with its status |
+| `precedents(query)` | the most similar resolved cases and how each was fixed |
+| `submit_diagnosis(category, fix_target, cause, reason)` | its answer |
+
+The model decides where to look. Around it:
+
+* **Its answer is checked before anything sees it.** An unknown category, a node that is not in the pipeline, or a protected
+  table comes back as an error it can read and correct.
+* **The first valid answer stands.** A real run of Qwen3 8B submitted the right procedure three times and then talked itself
+  into a wrong one, so a valid submission ends the investigation.
+* **It never acts.** The plan is derived from its root cause the same way the rule-based orchestrator does it, the reviewer
+  checks it, and the approval gate is unchanged.
+* **The tracer checks its work.** If the two name different root causes, the reviewer escalates with both traces. The eval
+  reports how many wrong diagnoses still reached the approval gate, which is the number that matters.
+
+```bash
+ollama pull qwen3:8b
+pip install -e ".[local]"
+python -m evals.run_eval --investigator --skip 40 --limit 20   # TRIAGE_MODEL / TRIAGE_BASE_URL to override
+```
+
+The same tools and prompt, run inside agent-harness-runtime on incidents 1 to 40, found the root cause on 28 of 40, against 40 of
+40 for the tracer ([measured there](https://github.com/dhruvdubey3123/agent-harness-runtime#is-the-model-any-good-at-it)). The run
+above uses incidents 41 to 60, which the investigator was never adjusted against. CI drives it with a scripted model and needs no
+model at all.
 
 ## Running inside the agent harness
 
@@ -37,7 +81,7 @@ that detective work automatically.
 It is my own version of the triage agent I worked on at Allegis, with tests and evals that block a bad change from merging.
 
 ```
-intake → tracer → analyst → precedent → classifier → orchestrator → reviewer
+intake → [investigator] → tracer → analyst → precedent → classifier → orchestrator → reviewer
                                                                       │
                                        escalate ◄── blocked ──────────┤
                                           │                           └── passed ──► [ human gate ]
@@ -52,18 +96,19 @@ intake → tracer → analyst → precedent → classifier → orchestrator → 
 | Node | Job | Notes |
 |---|---|---|
 | `intake` | Validate the incident and the symptom node | |
-| `tracer` | Walk upstream through unhealthy nodes only; rule out healthy branches | Pure graph logic, no LLM. Finds the fix target and any upstream contract change that caused it |
+| `investigator` | LLM agent: walk the graph with read-only tools and submit a diagnosis | Only when a model is configured. Its answer drives the plan; the tracer cross-checks it |
+| `tracer` | Walk upstream through unhealthy nodes only; rule out healthy branches | Pure graph logic, no LLM. Finds the fix target and any upstream contract change that caused it, or cross-checks the investigator |
 | `analyst` | Run data checks on the suspect nodes | `DataProbe` protocol. Default reads recorded observations; plug in a warehouse probe (for example semantic-view queries) |
 | `precedent` | Find similar resolved cases | TF-IDF over a YAML case library. Swap for a vector store or Cortex Search |
 | `classifier` | Assign a failure category | Rules by default; optional Claude call, validated against allowed categories |
 | `orchestrator` | Draft the fix and the re-run plan | Plan is computed from the DAG in topological order |
-| `reviewer` | Block unsafe or uncertain proposals | Protected nodes, unknown category, ambiguous trace, low confidence, plan touching the wrong node |
+| `reviewer` | Block unsafe or uncertain proposals | Protected nodes, unknown category, ambiguous trace, low confidence, plan touching the wrong node, investigator and tracer disagreeing |
 | `gate` | Human approval | Graph is compiled with `interrupt_before=["gate"]`, so a run always stops here |
 | `apply` | Execute the plan | `DryRunExecutor` by default: records what it would do, does nothing |
 | `learn` | Append the case to the library | Next similar failure starts from this precedent |
 
-The tracer decides the root cause from structure, not from a model. LLMs are only asked narrow
-questions (which category, how to word the fix), and their answers are checked before use.
+By default the tracer decides the root cause from structure, not from a model, and the eval numbers below are that path.
+With the investigator on, a model decides and the tracer checks it. Either way nothing is applied before a person approves.
 
 ## Run it
 
@@ -107,6 +152,9 @@ orchestrator  Update sp_fill_rate to match the changed upstream contract (cause:
 Tools: `list_nodes`, `get_upstream`, `get_downstream`, `trace_failure`, `search_precedents`. All read-only.
 
 ### Optional LLM mode
+
+For the LLM investigator that walks the graph itself, see [above](#an-llm-agent-that-walks-the-graph-itself). The older,
+narrower mode below asks Claude only for the category and the wording of the fix:
 
 ```bash
 pip install -e ".[llm]"
