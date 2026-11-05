@@ -2,8 +2,8 @@
 
     python -m evals.run_eval                 # print metrics, write evals/results.json
     python -m evals.run_eval --gate          # also exit 1 if any threshold in evals/thresholds.yaml fails
-    python -m evals.run_eval --investigator --skip 40 --limit 20
-                                             # the LLM investigator (local Ollama by default) on incidents 41-60,
+    python -m evals.run_eval --investigator --skip 60 --limit 20
+                                             # the LLM investigator (local Ollama by default) on incidents 61-80,
                                              # scored side by side with the tracer it is cross-checked against
 
 Each incident gets a fresh copy of the case library so results do not depend on order.

@@ -13,7 +13,8 @@ The graph is compiled with interrupt_before=["gate"], so a run always pauses bef
 change is made. A person resumes it with approve or reject (see TriageService.decide).
 
 [investigator] is there only when a chat model is passed in. It is an LLM agent with read-only
-tools that walks the dependency graph itself and submits a diagnosis, which then drives the plan.
+tools that walks the dependency graph itself and submits a diagnosis; its root cause then drives
+the plan, while the failure category stays with the rules.
 The tracer still runs after it, as a cross-check: if the two disagree on the root cause, the
 reviewer sends the incident to a person with both traces instead of to the approval gate.
 """
@@ -154,10 +155,12 @@ def build_graph(
         root_status = s["incident"].get("node_status", {}).get(s.get("fix_target") or "", {}).get("status")
         cat, signals = classify(s.get("evidence", ""), root_status)
         inv = s.get("investigation")
-        if inv is not None and inv["submitted"]:
-            if inv["category"] != cat:
-                signals.append(f"investigator said {inv['category']}; rules said {cat}")
-            cat = inv["category"]
+        if inv is not None and inv["submitted"] and inv["category"] != cat:
+            # The category stays with the rules. The model has to pick one from a list, so on a failure
+            # nobody has seen before it names a familiar one, and "unknown" is what sends an incident to
+            # a person. Measured on incidents 41-60, that hid 4 of 7 escalations; rules 17/17 vs model 9/17 on category. Its category is kept
+            # here as a second opinion instead.
+            signals.append(f"investigator said {inv['category']}; rules said {cat}")
         if llm.enabled():
             llm_cat = llm.classify(s.get("evidence", ""), s.get("precedents", []))
             if llm_cat and llm_cat != cat:

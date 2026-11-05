@@ -100,10 +100,25 @@ def test_an_unknown_tool_or_node_is_an_error_it_can_read():
     assert inv.submitted
 
 
-def test_its_category_is_used_and_the_rules_are_kept_as_a_signal():
+def test_the_category_stays_with_the_rules_and_the_models_is_a_second_opinion():
     _, v = svc(Scripted((TERMINAL, {**RIGHT, "category": "missed_load"}))).open(INCIDENT)
-    assert v["category"] == "missed_load"
-    assert any("rules said" in sig for sig in v["signals"])
+    assert v["category"] == "schema_drift"
+    assert any("investigator said missed_load" in sig for sig in v["signals"])
+
+
+def test_a_failure_nobody_recognises_reaches_a_person_even_when_the_model_names_one():
+    """Regression from a real Qwen3 8B run: on incidents the rules call 'unknown', the model picked a
+    familiar category and 4 of 7 escalations reached the approval gate instead of a person."""
+    rows = [json.loads(line) for line in (ROOT / "evals/data/incidents.jsonl").read_text().splitlines()]
+    inc = next(r for r in rows if r["id"] == "SYN-043")
+    assert inc.pop("label")["category"] == "unknown"
+    _, rules_view = TriageService(DAG, lib()).open(inc)
+    model = Scripted((TERMINAL, {"category": "schema_drift", "fix_target": rules_view["fix_target"],
+                                 "reason": "looks like schema drift"}))
+    _, v = svc(model).open(inc)
+    assert v["fix_target"] == rules_view["fix_target"]             # it found the right place
+    assert not v["waiting_for_human"]                                # and still goes to a person
+    assert "unrecognised failure category" in v["review_issues"]
 
 
 def test_without_a_model_the_graph_is_the_rule_based_one():

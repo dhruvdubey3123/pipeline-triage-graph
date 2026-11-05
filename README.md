@@ -46,17 +46,41 @@ The model decides where to look. Around it:
   checks it, and the approval gate is unchanged.
 * **The tracer checks its work.** If the two name different root causes, the reviewer escalates with both traces. The eval
   reports how many wrong diagnoses still reached the approval gate, which is the number that matters.
+* **The category stays with the rules.** The model's root cause drives the plan; its category is recorded as a second opinion,
+  because a model choosing from a list will put a familiar name on a failure nobody has seen (measured below).
 
 ```bash
 ollama pull qwen3:8b
 pip install -e ".[local]"
-python -m evals.run_eval --investigator --skip 40 --limit 20   # TRIAGE_MODEL / TRIAGE_BASE_URL to override
+python -m evals.run_eval --investigator --skip 60 --limit 20   # TRIAGE_MODEL / TRIAGE_BASE_URL to override
 ```
 
-The same tools and prompt, run inside agent-harness-runtime on incidents 1 to 40, found the root cause on 28 of 40, against 40 of
-40 for the tracer ([measured there](https://github.com/dhruvdubey3123/agent-harness-runtime#is-the-model-any-good-at-it)). The run
-above uses incidents 41 to 60, which the investigator was never adjusted against. CI drives it with a scripted model and needs no
-model at all.
+### Measured: Qwen3 8B on incidents 41 to 60
+
+Local Qwen3 8B through Ollama on an RTX 4060, on 20 incidents the investigator was never adjusted against:
+
+| Incidents 41 to 60 | Investigator (Qwen3 8B) | Tracer (rules) |
+|---|---|---|
+| Root cause correct | 13 / 20 | 20 / 20 |
+| Category correct (the 17 with a single right answer) | 9 / 17 | 17 / 17 |
+| Submitted a diagnosis | 20 / 20 | n/a |
+| Disagreed with the tracer on the root cause | 8 / 20 | |
+| **Wrong diagnoses that reached the approval gate** | **0** | |
+| Right diagnoses held back for a person | 0 | |
+| Median time per incident | 62 s, mostly the model's thinking tokens | under 1 ms |
+
+The model finds the root cause about two thirds of the time, consistent with 28 of 40 for the same tools run inside
+[agent-harness-runtime](https://github.com/dhruvdubey3123/agent-harness-runtime#is-the-model-any-good-at-it). The cross-check is
+what makes that usable: all 7 wrong diagnoses went to a person with both traces, and none reached the approval gate.
+
+**What the run exposed.** Of the 7 incidents that should go to a person, only 3 did. Four were failures nobody has a category
+for; the rules say `unknown`, which is a reason to escalate, but the model has to pick from a list and named a familiar
+category, so the incident looked routine and reached the gate. It was right about *where* the failure was and overconfident
+about *what* it was. So the category now stays with the rules, which scored 17 of 17 against the model's 9 of 17, and the
+model's category is kept as a second opinion in the signals. A regression test replays one of those incidents. That change was
+made after seeing these 20, so its effect has to be measured on fresh ones: `--skip 60 --limit 20`.
+
+CI drives the investigator with a scripted model and needs no model at all.
 
 ## Running inside the agent harness
 

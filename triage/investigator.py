@@ -17,7 +17,7 @@ Any server that speaks the OpenAI chat-completions API with tool calling works: 
 llama.cpp's server, LM Studio. The default is a local Ollama.
 
     ollama pull qwen3:8b
-    python -m evals.run_eval --investigator --skip 40 --limit 20
+    python -m evals.run_eval --investigator --skip 60 --limit 20
 """
 from __future__ import annotations
 
