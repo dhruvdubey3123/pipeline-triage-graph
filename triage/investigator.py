@@ -165,6 +165,18 @@ class ChatModel(Protocol):
         """-> the assistant message: {"tool_calls": [...]} or {"content": "..."}"""
 
 
+def _raise_with_body(r) -> None:
+    """Raise with what the provider actually said: a hosted API answering 400 names the part of the
+    request it rejected, and a bare status line turns that into guesswork."""
+    import httpx
+
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        body = (getattr(r, "text", "") or "")[:600]
+        raise httpx.HTTPStatusError(f"{e}\n{body}" if body else str(e), request=e.request, response=e.response) from None
+
+
 class OpenAICompatChat:
     """Chat completions with tool calling over HTTP. Defaults to a local Ollama, no API key."""
 
@@ -191,9 +203,9 @@ class OpenAICompatChat:
             if r.status_code in (429, 503) and attempt < self.retries:
                 time.sleep(min(float(r.headers.get("retry-after") or 2 ** attempt * 2), 60.0))
                 continue
-            r.raise_for_status()
+            _raise_with_body(r)
             return r.json()["choices"][0]["message"]
-        r.raise_for_status()
+        _raise_with_body(r)
         return r.json()["choices"][0]["message"]
 
 
