@@ -113,30 +113,46 @@ pip install -e ".[local]"
 python -m evals.run_eval --investigator --skip 60 --limit 20   # TRIAGE_MODEL / TRIAGE_BASE_URL / TRIAGE_API_KEY to override
 ```
 
-### Measured: Qwen3 8B on incidents 41 to 60
+### Measured: two models, held-out incidents
 
-Local Qwen3 8B through Ollama on an RTX 4060, on 20 incidents the investigator was never adjusted against:
+Every row is an incident the model was never adjusted against. Qwen3 8B ran locally through Ollama on an RTX 4060;
+GPT-OSS 120B through Groq's free tier, which is the same code and the same prompts with two environment variables changed.
 
-| Incidents 41 to 60 | Investigator (Qwen3 8B) | Tracer (rules) |
-|---|---|---|
-| Root cause correct | 13 / 20 | 20 / 20 |
-| Category correct (the 17 with a single right answer) | 9 / 17 | 17 / 17 |
-| Submitted a diagnosis | 20 / 20 | n/a |
-| Disagreed with the tracer on the root cause | 8 / 20 | |
-| **Wrong diagnoses that reached the approval gate** | **0** | |
-| Right diagnoses held back for a person | 0 | |
-| Median time per incident | 62 s, mostly the model's thinking tokens | under 1 ms |
+| | Qwen3 8B, incidents 41 to 60 | GPT-OSS 120B, incidents 61 to 80 | Tracer (rules) |
+|---|---|---|---|
+| Root cause correct | 13 / 20 | **18 / 20** | 20 / 20 on both |
+| Category correct (the ones with a single right answer) | 9 / 17 | **18 / 18** | 17 / 17 |
+| Submitted a diagnosis | 20 / 20 | 20 / 20 | n/a |
+| Disagreed with the tracer on the root cause | 8 / 20 | 2 / 20 | |
+| **Wrong diagnoses that reached the approval gate** | **0 of 7** | **0 of 2** | |
+| Right diagnoses held back for a person | 0 | 0 | |
+| Briefings that passed the faithfulness check | not measured | **20 / 20** | n/a |
+| Escalations caught | 3 of 7 | **3 of 3** | 7 of 7 |
+| Follow-up checks the coordinator chose | n/a | 5.9 per incident | n/a |
 
-The model finds the root cause about two thirds of the time, consistent with 28 of 40 for the same tools run inside
-[agent-harness-runtime](https://github.com/dhruvdubey3123/agent-harness-runtime#is-the-model-any-good-at-it). The cross-check is
-what makes that usable: all 7 wrong diagnoses went to a person with both traces, and none reached the approval gate.
+Model size is most of the difference: a 120B model finds nine root causes in ten where an 8B model finds two in three, and
+names the category correctly every time where the 8B model managed about half. Neither is trusted on its own. The tracer gets
+all 20 either way, so it still decides, and the cross-check is what makes a fallible model usable: across both runs every
+wrong diagnosis went to a person and none reached the approval gate.
 
-**What the run exposed.** Of the 7 incidents that should go to a person, only 3 did. Four were failures nobody has a category
-for; the rules say `unknown`, which is a reason to escalate, but the model has to pick from a list and named a familiar
-category, so the incident looked routine and reached the gate. It was right about *where* the failure was and overconfident
-about *what* it was. So the category now stays with the rules, which scored 17 of 17 against the model's 9 of 17, and the
-model's category is kept as a second opinion in the signals. A regression test replays one of those incidents. That change was
-made after seeing these 20, so its effect has to be measured on fresh ones: `--skip 60 --limit 20`.
+**The honest cost.** Two of the 120B model's diagnoses were wrong, it disagreed with the tracer on both, and both went to a
+person. That is 2 incidents in 20 that a person had to look at and the rules alone would have proposed without help. Catching
+every wrong answer and never holding back a right one is worth that.
+
+**The category fix, checked on fresh data.** On incidents 41 to 60 the 8B model named four unrecognised failures as familiar
+categories, so they looked routine and only 3 of 7 escalations reached a person. The category now stays with the rules.
+SYN-071, in the 61 to 80 run, is exactly that case: an unrecognised failure where the model again submitted a confident
+category. It escalated, and the briefing the model wrote says why in its own words: *"The next step is to escalate the
+incident to a person. The reviewer flagged an unrecognised failure category, noted that there was no proposal, and
+highlighted that the confidence of 0.0 is below the 0.5 threshold."*
+
+**What the coordinator actually chose.** About 6 read-only checks per incident, most often `downstream` (the blast radius of
+the failure and of the fix), then `status`, `upstream` and `probe`, with `precedents` occasionally. It reached for impact and
+data checks rather than re-deriving the diagnosis, which is the division of work the design intends. Those findings show up
+in the briefings: one cites a precedent case the coordinator looked up, by id.
+
+**Speed.** About 50 s per incident on the free tier, which is rate limiting rather than the model: the run sits on an 8K
+tokens-per-minute ceiling and waits it out. A paid tier or a local 120B would be seconds.
 
 CI drives the investigator with a scripted model and needs no model at all.
 
