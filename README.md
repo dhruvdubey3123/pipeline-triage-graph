@@ -341,6 +341,13 @@ explains it but does not write it. The next step is a drafting agent that propos
 procedure's SQL, for a person to review. It needs ground truth first: procedure code and a reference fix for each labelled
 incident, so a draft can be scored rather than admired. Until then it would be an unmeasured claim, so it is not built.
 
+**What "it worked" means here.** The eval scores the diagnosis against labels: the right root cause, the right category, the
+right decision about whether a person should see it. Whether applying the plan actually repaired the pipeline is not scored
+anywhere, because the executor writes to a stand-in rather than a warehouse that can be stale or fresh. Applying the plan
+faithfully is measured, in
+[agent-harness-runtime (Keel)](https://github.com/dhruvdubey3123/agent-harness-runtime#every-guarantee-against-a-real-model);
+confirming the report came back is what the production scope below adds.
+
 **Future scope 2: a real pipeline in production.** Probes and the executor are already interfaces (`triage/adapters.py`):
 point `DataProbe` at warehouse queries (for example Snowflake semantic views), `Executor` at the scheduler's API, and run the
 service behind the existing FastAPI and MCP endpoints with the Kubernetes manifests in `k8s/`. Applying fixes would go through
