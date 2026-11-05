@@ -174,7 +174,11 @@ def _raise_with_body(r) -> None:
         r.raise_for_status()
     except httpx.HTTPStatusError as e:
         body = (getattr(r, "text", "") or "")[:600]
-        raise httpx.HTTPStatusError(f"{e}\n{body}" if body else str(e), request=e.request, response=e.response) from None
+        try:
+            request = e.request
+        except RuntimeError:            # never sent, so there is no request to point at
+            request = None
+        raise httpx.HTTPStatusError(f"{e}\n{body}" if body else str(e), request=request, response=e.response) from None
 
 
 class OpenAICompatChat:
