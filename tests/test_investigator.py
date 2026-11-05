@@ -161,3 +161,42 @@ def test_the_http_client_speaks_the_openai_tool_calling_shape(monkeypatch):
     assert seen["url"] == "http://localhost:11434/v1/chat/completions"
     assert seen["body"]["model"] == "qwen3:8b" and seen["body"]["temperature"] == 0.0
     assert {t["function"]["name"] for t in seen["body"]["tools"]} >= {TERMINAL, "upstream"}
+
+
+def test_a_model_that_times_out_sends_the_incident_to_a_person():
+    """A real run on a laptop hit a five-minute timeout and crashed the whole graph. A model that cannot
+    answer has not diagnosed anything: that is a reason to escalate, not to fail."""
+    import httpx
+
+    class TimesOut:
+        model = "slow"
+
+        def chat(self, messages, tools):
+            raise httpx.ReadTimeout("timed out")
+
+    _, v = svc(TimesOut()).open(INCIDENT)
+    assert not v["waiting_for_human"] and v["outcome"] == "escalated"
+    assert "the investigator submitted no diagnosis" in v["review_issues"]
+    assert "model unavailable (ReadTimeout)" in v["investigation"]["steps"][0]["result"]
+
+
+def test_one_broken_incident_does_not_lose_the_eval(monkeypatch):
+    from evals.run_eval import evaluate
+    real_open = TriageService.open
+
+    def flaky(self, incident):
+        if incident["id"] == "SYN-002":
+            raise RuntimeError("boom")
+        return real_open(self, incident)
+
+    monkeypatch.setattr(TriageService, "open", flaky)
+    res = evaluate(ROOT / "evals/data/incidents.jsonl", ROOT / "examples/pipeline.yaml",
+                   ROOT / "examples/case_library.yaml", limit=4)
+    assert res["incidents"] == 4 and res["root_accuracy"] == 0.75
+    assert res["errored"] == [{"id": "SYN-002", "error": "RuntimeError: boom"}]
+
+
+def test_the_request_timeout_is_configurable(monkeypatch):
+    from triage.investigator import OpenAICompatChat
+    monkeypatch.setenv("TRIAGE_TIMEOUT", "900")
+    assert OpenAICompatChat().timeout == 900.0

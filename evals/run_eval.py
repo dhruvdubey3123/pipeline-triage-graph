@@ -46,14 +46,19 @@ def evaluate(data_path: Path, pipeline: Path, cases: Path, investigator=None, sk
 
     root_hits = cause_hits = cause_total = cat_hits = cat_total = act_hits = 0
     should_esc = esc_caught = should_prop = false_esc = 0
-    checked, latencies, failures = [], [], []
+    checked, latencies, failures, errored = [], [], [], []
 
     for row in rows:
         label = row.pop("label")
         lib = CaseLibrary(copy.deepcopy(base.cases))
         svc = TriageService(dag, lib, investigator=investigator, communicator=communicator, coordinator=coordinator)
         t0 = time.perf_counter()
-        run_id, v = svc.open(row)
+        try:
+            run_id, v = svc.open(row)
+        except Exception as e:      # one broken incident is one failed row, not a lost run
+            errored.append({"id": row["id"], "error": f"{type(e).__name__}: {e}"})
+            print(f"  {row['id']}: {type(e).__name__}, counted as wrong and continuing", file=sys.stderr)
+            continue
         latencies.append((time.perf_counter() - t0) * 1000)
         escalated = not v["waiting_for_human"]
 
@@ -141,6 +146,7 @@ def evaluate(data_path: Path, pipeline: Path, cases: Path, investigator=None, sk
             "wrong diagnoses that reached the approval gate": inv_stats["wrong_reached_gate"],
             "right diagnoses held back for a person": inv_stats["right_held_back"],
             "mean tool calls": round(statistics.mean(inv_stats["calls"]), 1) if inv_stats["calls"] else 0}}),
+        "errored": errored,
         "failures": failures,
     }
 

@@ -168,11 +168,13 @@ class OpenAICompatChat:
     """Chat completions with tool calling over HTTP. Defaults to a local Ollama, no API key."""
 
     def __init__(self, model: str | None = None, base_url: str | None = None, api_key: str | None = None,
-                 timeout: float = 300.0):
+                 timeout: float | None = None):
         self.model = model or os.environ.get("TRIAGE_MODEL", "qwen3:8b")
         self.base_url = (base_url or os.environ.get("TRIAGE_BASE_URL", "http://localhost:11434/v1")).rstrip("/")
         self.api_key = api_key or os.environ.get("TRIAGE_API_KEY", "not-needed-for-local")
-        self.timeout = timeout
+        # Per request. A small local model thinking at length on a laptop can take minutes, so it is
+        # configurable; when it is exceeded the step treats the model as unavailable rather than failing.
+        self.timeout = timeout or float(os.environ.get("TRIAGE_TIMEOUT", "300"))
 
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
         import httpx  # imported here so the rules-only path has no dependency on it
@@ -219,7 +221,16 @@ def investigate(incident: dict, dag: PipelineDAG, library: CaseLibrary, model: C
     messages: list[dict] = [{"role": "system", "content": INSTRUCTIONS}, {"role": "user", "content": task(incident)}]
     out = Investigation()
     for n in range(max_steps):
-        msg = model.chat(messages, schemas)
+        try:
+            msg = model.chat(messages, schemas)
+        except Exception as e:
+            # A model that times out or is unreachable has not diagnosed anything. That is recorded and the
+            # investigation ends without a submission, which the reviewer sends to a person. It is never a
+            # crash of the whole graph, and never a guess.
+            out.steps.append({"tool": "-", "args": {}, "ok": False,
+                              "result": f"model unavailable ({type(e).__name__}): no diagnosis"})
+            out.answer = f"model unavailable ({type(e).__name__})"
+            break
         calls = msg.get("tool_calls") or []
         if not calls:
             out.answer = re.sub(r"<think>.*?</think>", "", msg.get("content") or "", flags=re.S).strip()
