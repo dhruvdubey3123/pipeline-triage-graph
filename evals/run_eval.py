@@ -2,8 +2,9 @@
 
     python -m evals.run_eval                 # print metrics, write evals/results.json
     python -m evals.run_eval --gate          # also exit 1 if any threshold in evals/thresholds.yaml fails
-    python -m evals.run_eval --communicator --skip 60 --limit 20
-                                             # deterministic traversal, LLM briefing at the gate (the Allegis split)
+    python -m evals.run_eval --coordinator --communicator --skip 60 --limit 20
+                                             # deterministic traversal; the LLM orchestrates follow-up checks
+                                             # and briefs the person (the Allegis split)
     python -m evals.run_eval --investigator --skip 60 --limit 20
                                              # the LLM investigator (local Ollama by default) on incidents 61-80,
                                              # scored side by side with the tracer it is cross-checked against
@@ -33,12 +34,13 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def evaluate(data_path: Path, pipeline: Path, cases: Path, investigator=None, skip: int = 0,
-             limit: int | None = None, communicator=None) -> dict:
+             limit: int | None = None, communicator=None, coordinator=None) -> dict:
     dag = PipelineDAG.from_yaml(pipeline)
     base = CaseLibrary.load(cases)
     rows = [json.loads(l) for l in data_path.read_text().splitlines() if l.strip()][skip:]
     rows = rows[:limit] if limit else rows
     com_stats = {"model": 0, "template": 0, "reasons": {}, "example": None}
+    coo_stats = {"checks": [], "tools": {}}
     inv_stats = {"submitted": 0, "root": 0, "category": 0, "category_total": 0, "tracer_root": 0,
                  "disagreed": 0, "wrong_reached_gate": 0, "right_held_back": 0, "calls": []}
 
@@ -49,7 +51,7 @@ def evaluate(data_path: Path, pipeline: Path, cases: Path, investigator=None, sk
     for row in rows:
         label = row.pop("label")
         lib = CaseLibrary(copy.deepcopy(base.cases))
-        svc = TriageService(dag, lib, investigator=investigator, communicator=communicator)
+        svc = TriageService(dag, lib, investigator=investigator, communicator=communicator, coordinator=coordinator)
         t0 = time.perf_counter()
         run_id, v = svc.open(row)
         latencies.append((time.perf_counter() - t0) * 1000)
@@ -72,6 +74,11 @@ def evaluate(data_path: Path, pipeline: Path, cases: Path, investigator=None, sk
             should_prop += 1
             false_esc += escalated
         checked.append(len(v.get("hops", [])))
+        if v.get("context_checks") is not None:
+            ok_calls = [c for c in v["context_checks"]["calls"] if c["ok"] and c["tool"] != "finish"]
+            coo_stats["checks"].append(len(ok_calls))
+            for c in ok_calls:
+                coo_stats["tools"][c["tool"]] = coo_stats["tools"].get(c["tool"], 0) + 1
         if v.get("briefing_source"):
             com_stats[v["briefing_source"]] += 1
             for p in v.get("briefing_problems") or []:
@@ -114,7 +121,11 @@ def evaluate(data_path: Path, pipeline: Path, cases: Path, investigator=None, sk
         "p95_latency_ms": round(sorted(latencies)[int(0.95 * (n - 1))], 1),
         "mode": ("offline rules (no LLM)" if investigator is None else
                  f"LLM investigator ({getattr(investigator, 'model', '?')}) cross-checked by the rule-based tracer")
+                + ("" if coordinator is None else ", LLM coordinator")
                 + ("" if communicator is None else f", LLM communicator ({getattr(communicator, 'model', '?')})"),
+        **({} if coordinator is None else {"coordinator": {
+            "mean extra checks per incident": round(statistics.mean(coo_stats["checks"]), 1) if coo_stats["checks"] else 0,
+            "checks it chose": coo_stats["tools"]}}),
         **({} if communicator is None else {"communicator": {
             "briefings written by the model that passed the check": f"{com_stats['model']}/{n}",
             "fell back to the template": com_stats["template"],
@@ -146,18 +157,21 @@ def main() -> None:
                     help="run the LLM investigator (TRIAGE_MODEL / TRIAGE_BASE_URL, default qwen3:8b on Ollama)")
     ap.add_argument("--communicator", action="store_true",
                     help="the LLM writes the briefing at the gate, checked against the trace (same model settings)")
+    ap.add_argument("--coordinator", action="store_true",
+                    help="the LLM chooses extra read-only checks for the person deciding (same model settings)")
     ap.add_argument("--skip", type=int, default=0, help="skip the first N incidents, for a held-out sample")
     ap.add_argument("--limit", type=int, default=None)
     a = ap.parse_args()
 
     model = None
-    if a.investigator or a.communicator:
+    if a.investigator or a.communicator or a.coordinator:
         from triage.investigator import OpenAICompatChat
         model = OpenAICompatChat()
         if a.out == str(ROOT / "evals/results.json"):
             a.out = str(ROOT / "evals/results_llm.json")
     res = evaluate(Path(a.data), Path(a.pipeline), Path(a.cases), investigator=model if a.investigator else None,
-                   skip=a.skip, limit=a.limit, communicator=model if a.communicator else None)
+                   skip=a.skip, limit=a.limit, communicator=model if a.communicator else None,
+                   coordinator=model if a.coordinator else None)
     Path(a.out).write_text(json.dumps(res, indent=2) + "\n")
     summary = {k: v for k, v in res.items() if k != "failures"}
     print(json.dumps(summary, indent=2))

@@ -11,7 +11,9 @@ A briefing is still a place a model can go wrong, so it is checked before anyone
   * it may only name tables and jobs the trace touched or the plan changes, so it cannot invent a step
     or point at a job nobody examined;
   * it has to name the root cause, so the one fact the reader needs is never paraphrased away;
-  * it may not call the failure a different category from the one the findings settled on.
+  * it may not call the failure a different category from the one the findings settled on;
+  * it may not suggest acting on a table or job the plan does not change, so context the coordinator
+    gathered (what else is affected, say) can inform the reader without turning into an extra step.
 
 A briefing that fails any check is replaced by a template built from the same findings, and the reason
 is recorded. The person always gets a briefing; only a faithful one comes from the model.
@@ -21,6 +23,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .coordinator import Checks
 from .dag import PipelineDAG
 from .investigator import ChatModel
 from .knowledge import CATEGORIES
@@ -51,6 +54,8 @@ def facts(state: dict, dag: PipelineDAG) -> dict:
     plan_nodes = [step.split(" ", 1)[1] for step in plan if " " in step]
     allowed = {h["node"] for h in hops} | set(plan_nodes)
     allowed |= {n for n in (state.get("fix_target"), state.get("upstream_cause"), inc.get("symptom_node")) if n}
+    checks = Checks(**state["context_checks"]) if state.get("context_checks") else Checks()
+    allowed |= checks.nodes(dag)
     issues = state.get("review_issues") or []
     return {
         "incident": inc.get("id"),
@@ -66,8 +71,10 @@ def facts(state: dict, dag: PipelineDAG) -> dict:
                                    for p in (state.get("precedents") or [])[:2]],
         "plan": plan,
         "reviewer flagged": issues,
+        "extra checks the coordinator ran": checks.facts(),
         "next": "waiting for a person to approve" if state.get("route") == "gate" else "escalated to a person",
         "_allowed_nodes": sorted(allowed),
+        "_plan_nodes": sorted(set(plan_nodes)),
     }
 
 
@@ -107,6 +114,12 @@ def check(text: str, f: dict, dag: PipelineDAG) -> list[str]:
             problems.append(f"names {node}, which the trace never touched and the plan does not change")
     if f["root cause"] and not _mentions(text, f["root cause"]):
         problems.append(f"does not name the root cause, {f['root cause']}")
+    for node in dag.nodes:
+        if node in f["_plan_nodes"]:
+            continue
+        if re.search(rf"\b(?:re-?run|refresh|rebuild|patch|fix|restart|backfill|reload|drop|delete|truncate)\w*"
+                     rf"\b[^.;:]{{0,40}}?(?<![A-Za-z0-9_]){re.escape(node)}(?![A-Za-z0-9_])", text, flags=re.I):
+            problems.append(f"suggests acting on {node}, which the plan does not change")
     for cat in CATEGORIES:
         if cat in ("unknown", f["category"]):
             continue

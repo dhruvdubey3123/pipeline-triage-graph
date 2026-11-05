@@ -10,9 +10,13 @@ person approves it**.
 deterministic, a stored procedure, because a wrong root cause is expensive; the LLM was used to orchestrate and to
 communicate what the traversal found. This repo keeps that split by default:
 
-* the **tracer** walks the graph with fixed rules and decides the root cause;
-* the **communicator** (local Qwen3 8B through Ollama by default) writes the briefing the person at the approval gate
-  reads, from the tracer's findings only, and is checked against them before anyone sees it.
+* the **tracer** walks the graph with fixed rules and decides the root cause, and the rest of the decision (category,
+  plan, review) stays deterministic too;
+* the **coordinator** (local Qwen3 8B through Ollama by default) then orchestrates the follow-up: it chooses which
+  read-only checks to run for the person deciding, such as what else is affected downstream or a data probe on the
+  upstream cause. It runs after the decision and cannot move it, which CI checks on all 200 labelled incidents;
+* the **communicator** writes the briefing the person at the approval gate reads, from the findings and those checks
+  only, and is checked against them before anyone sees it.
 
 It also measures the alternative Allegis chose not to ship: an **investigator**, an LLM agent that walks the graph itself
 through read-only tools. With it on, the tracer cross-checks the model's root cause and any disagreement goes to a
@@ -26,6 +30,23 @@ written from scratch, runs anywhere, and ships with its own eval suite.
 ![Triage demo: a schema change breaks the pipeline, the tracer walks upstream to the root cause, a person approves the fix](docs/demo.gif)
 
 Try it yourself in the [live demo on my portfolio](https://dhruvdubey3123.github.io/#triage): break any box, run triage, approve or reject the fix.
+
+## The coordinator: the LLM chooses what else to check
+
+```
+... -> reviewer (decision made) -> coordinator (LLM, read-only tools) -> communicator (LLM) -> [human gate]
+```
+
+The orchestrating half of the Allegis LLM's job. `triage/coordinator.py` gets the decision as fixed context and six
+read-only, deterministic tools: `status`, `upstream`, `downstream` (the blast radius of the failure and of the fix), `probe`
+(the same data check the analyst uses), `precedents` with its own query, and `finish`. It decides which to call, on what, in
+what order, and when to stop. What it finds goes to the communicator and into the run log for the person deciding.
+
+It is placed after the reviewer on purpose. Letting a model choose which evidence feeds a decision would let it move the
+decision, so nothing downstream of it reads what it found except the briefing. That is a test rather than a promise:
+CI runs every labelled incident, clean and noisy, with a coordinator that calls random tools on random nodes, including
+ones that do not exist, and asserts the root cause, category, plan, confidence, review and route are identical to the
+rules path. A deliberately broken coordinator that forces the route fails that test.
 
 ## The communicator: the LLM explains, the trace stays the facts
 
@@ -42,14 +63,17 @@ A fluent briefing can still mislead, so it is checked before it is shown:
 * **it may only name tables and jobs the trace touched or the plan changes**, so it cannot invent a step or point at a job
   nobody examined;
 * **it has to name the root cause**, so the one fact the reader needs is never paraphrased away;
-* **it may not rename the failure** to a different category from the one the findings settled on.
+* **it may not rename the failure** to a different category from the one the findings settled on;
+* **it may not suggest acting on a table or job the plan does not change**, so context the coordinator gathered can inform
+  the reader without turning into an extra step.
 
 A briefing that fails is replaced by a template built from the same findings, and the reason is recorded, so the person
 always gets one and only a faithful one comes from the model. Escalated incidents get a briefing too, for the owner who
 picks them up. The traversal, the plan and the reviewer's decision are identical with or without it, which a test asserts.
 
 ```bash
-python -m evals.run_eval --communicator --skip 60 --limit 20   # deterministic traversal, LLM briefing: the Allegis split
+python -m evals.run_eval --coordinator --communicator --skip 60 --limit 20   # the Allegis split: rules decide, the LLM
+                                                                            # orchestrates follow-up checks and explains
 ```
 
 The eval reports how many briefings the model wrote that passed the check, how many fell back, and why.
@@ -139,7 +163,8 @@ that detective work automatically.
 It is my own version of the triage agent I worked on at Allegis, with tests and evals that block a bad change from merging.
 
 ```
-intake → [investigator] → tracer → analyst → precedent → classifier → orchestrator → reviewer → [communicator]
+intake → [investigator] → tracer → analyst → precedent → classifier → orchestrator → reviewer
+       → [coordinator] → [communicator]
 
     passed  → [ human gate ] → approve → apply    → learn
                              → reject  → escalate → learn
@@ -160,13 +185,15 @@ intake → [investigator] → tracer → analyst → precedent → classifier �
 | `classifier` | Assign a failure category | Rules by default; optional Claude call, validated against allowed categories |
 | `orchestrator` | Draft the fix and the re-run plan | Plan is computed from the DAG in topological order |
 | `reviewer` | Block unsafe or uncertain proposals | Protected nodes, unknown category, ambiguous trace, low confidence, plan touching the wrong node, investigator and tracer disagreeing |
+| `coordinator` | LLM: choose which read-only follow-up checks to run for the person deciding | Only when a model is configured. Runs after the decision and cannot move it (tested on all 200 incidents) |
 | `communicator` | LLM: write the briefing for the person deciding, from the findings only | Only when a model is configured. Checked against the trace; falls back to a template |
 | `gate` | Human approval | Graph is compiled with `interrupt_before=["gate"]`, so a run always stops here |
 | `apply` | Execute the plan | `DryRunExecutor` by default: records what it would do, does nothing |
 | `learn` | Append the case to the library | Next similar failure starts from this precedent |
 
 By default the tracer decides the root cause from structure, not from a model, and the eval numbers below are that path.
-The communicator only explains; the investigator, when on, proposes and the tracer checks it. Either way nothing is
+The coordinator only gathers context and the communicator only explains; the investigator, when on, proposes and
+the tracer checks it. Either way nothing is
 applied before a person approves.
 
 ## Run it
