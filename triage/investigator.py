@@ -191,14 +191,23 @@ def _retry_after(r) -> float | None:
     return int(m.group(1) or 0) * 60 + float(m.group(2)) if m else None
 
 
+def _too_big_to_ever_fit(r) -> bool:
+    """One request that needs more tokens than the whole per-minute budget. No amount of waiting makes
+    it fit, so retrying is a slow way of failing. Groq spells this out: "Limit 8000, ... Requested 9000"."""
+    m = re.search(r"Limit (\d+),.*?Requested (\d+)", (getattr(r, "text", "") or ""), re.S)
+    return bool(m) and int(m.group(2)) > int(m.group(1))
+
+
 def _wait(r, attempt: int, max_wait: float) -> float | None:
     """Seconds to sleep before asking again, or None to stop trying.
 
-    A provider that asks for longer than we are willing to wait is telling us the budget is gone, not
-    that it is busy: waiting the maximum and failing anyway would only hide the reason.
+    A provider that asks for longer than we are willing to wait, or that cannot fit this request into
+    its budget at all, is telling us to change something rather than to be patient.
     """
     if not _rate_limited(r):
         return 0.5
+    if _too_big_to_ever_fit(r):
+        return None
     asked = _retry_after(r)
     if asked is None:
         return min(2 ** attempt * 2, max_wait)
