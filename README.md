@@ -20,7 +20,7 @@ communicate what the traversal found. This repo keeps that split by default:
 
 It also measures the alternative Allegis chose not to ship: an **investigator**, an LLM agent that walks the graph itself
 through read-only tools. With it on, the tracer cross-checks the model's root cause and any disagreement goes to a
-person. On held-out incidents it found the root cause 13 times in 20 against the tracer's 20, which is the measured case
+person. On held-out incidents it found the root cause 18 times in 20 against the tracer's 20, which is the measured case
 for keeping the traversal deterministic.
 
 This is an open-source rebuild of the pattern behind a triage agent I built during my internship at
@@ -113,38 +113,41 @@ pip install -e ".[local]"
 python -m evals.run_eval --investigator --skip 60 --limit 20   # TRIAGE_MODEL / TRIAGE_BASE_URL / TRIAGE_API_KEY to override
 ```
 
-### Measured: two models, held-out incidents
+### Measured: held-out incidents
 
-Every row is an incident the model was never adjusted against. Qwen3 8B ran locally through Ollama on an RTX 4060;
-GPT-OSS 120B through Groq's free tier, which is the same code and the same prompts with two environment variables changed.
+Every row is an incident the model was never adjusted against. GPT-OSS 120B ran through Groq's free tier. The same code
+and the same prompts run end to end on a local open-weight model through Ollama, with two environment variables changed.
 
-| | Qwen3 8B, incidents 41 to 60 | GPT-OSS 120B, incidents 61 to 80 | Tracer (rules) |
-|---|---|---|---|
-| Root cause correct | 13 / 20 | **18 / 20** | 20 / 20 on both |
-| Category correct (the ones with a single right answer) | 9 / 17 | **18 / 18** | 17 / 17 |
-| Submitted a diagnosis | 20 / 20 | 20 / 20 | n/a |
-| Disagreed with the tracer on the root cause | 8 / 20 | 2 / 20 | |
-| **Wrong diagnoses that reached the approval gate** | **0 of 7** | **0 of 2** | |
-| Right diagnoses held back for a person | 0 | 0 | |
-| Briefings that passed the faithfulness check | not measured | **20 / 20** | n/a |
-| Escalations caught | 3 of 7 | **3 of 3** | 7 of 7 |
-| Follow-up checks the coordinator chose | n/a | 5.9 per incident | n/a |
+| | GPT-OSS 120B, incidents 61 to 80 | Tracer (rules) |
+|---|---|---|
+| Root cause correct | **18 / 20** | 20 / 20 |
+| Category correct (the ones with a single right answer) | **18 / 18** | 18 / 18 |
+| Submitted a diagnosis | 20 / 20 | n/a |
+| Disagreed with the tracer on the root cause | 2 / 20 | |
+| **Wrong diagnoses that reached the approval gate** | **0 of 2** | |
+| Right diagnoses held back for a person | 0 | |
+| Briefings that passed the faithfulness check | **20 / 20** | n/a |
+| Escalations caught | **3 of 3** | 3 of 3 |
+| Follow-up checks the coordinator chose | 5.9 per incident | n/a |
 
-Model size is most of the difference: a 120B model finds nine root causes in ten where an 8B model finds two in three, and
-names the category correctly every time where the 8B model managed about half. Neither is trusted on its own. The tracer gets
-all 20 either way, so it still decides, and the cross-check is what makes a fallible model usable: across both runs every
-wrong diagnosis went to a person and none reached the approval gate.
+The model finds nine root causes in ten and is not trusted on its own. The tracer gets all 20, so it still decides, and the
+cross-check is what makes a fallible model usable: both wrong diagnoses went to a person and neither reached the approval gate.
 
-**The honest cost.** Two of the 120B model's diagnoses were wrong, it disagreed with the tracer on both, and both went to a
-person. That is 2 incidents in 20 that a person had to look at and the rules alone would have proposed without help. Catching
-every wrong answer and never holding back a right one is worth that.
+**How far these numbers go.** Twenty incidents is a small sample: 18 of 20 is consistent with anything from about 70% to 97%,
+and 2 wrong answers caught out of 2 says very little about a catch rate. "Held out" means the model and prompts were not
+adjusted against these rows; incidents 61 to 80 come from the same generator and seed as the rest, so they are not a different
+kind of failure. Every incident also reports the broken node with a `failed` or `missing` status, which is why fixed rules get
+all of them. And the cross-check passes a diagnosis only when it names the node the tracer named, so it catches a wrong model
+exactly as often as the tracer is right, and it cannot let through a model that is right where the tracer is wrong.
 
-**The category fix, checked on fresh data.** On incidents 41 to 60 the 8B model named four unrecognised failures as familiar
-categories, so they looked routine and only 3 of 7 escalations reached a person. The category now stays with the rules.
-SYN-071, in the 61 to 80 run, is exactly that case: an unrecognised failure where the model again submitted a confident
-category. It escalated, and the briefing the model wrote says why in its own words: *"The next step is to escalate the
-incident to a person. The reviewer flagged an unrecognised failure category, noted that there was no proposal, and
-highlighted that the confidence of 0.0 is below the 0.5 threshold."*
+**The honest cost.** Two of the model's diagnoses were wrong, it disagreed with the tracer on both, and both went to a
+person. That is 2 incidents in 20 that a person had to look at and the rules alone would have proposed without help.
+
+**The category stays with the rules.** A model has to pick a category from a list, so on a failure nobody has seen before
+it names a familiar one, and "unknown" is what sends an incident to a person. SYN-071 is exactly that case: an unrecognised
+failure where the model submitted a confident category. It escalated, and the briefing the model wrote says why in its own
+words: *"The next step is to escalate the incident to a person. The reviewer flagged an unrecognised failure category, noted
+that there was no proposal, and highlighted that the confidence of 0.0 is below the 0.5 threshold."*
 
 **What the coordinator actually chose.** About 6 read-only checks per incident, most often `downstream` (the blast radius of
 the failure and of the fix), then `status`, `upstream` and `probe`, with `precedents` occasionally. It reached for impact and
