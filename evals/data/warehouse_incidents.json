@@ -1,0 +1,432 @@
+[
+ {
+  "id": "type_drift.price_as_integer",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "changed",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "changed",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "changed",
+   "mart_customer_revenue": "changed",
+   "mart_supplier_performance": "changed",
+   "rpt_revenue_dashboard": "changed",
+   "rpt_regional_summary": "changed"
+  },
+  "fix_targets": [
+   "stg_lineitem"
+  ],
+  "family": "type_drift",
+  "split": "evolve",
+  "what": "prices lose their cents",
+  "diff": {
+   "find": "l_extendedprice as extended_price",
+   "replace": "cast(l_extendedprice as integer) as extended_price"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "stg_lineitem",
+   "int_order_items",
+   "mart_daily_revenue",
+   "mart_customer_revenue",
+   "mart_supplier_performance",
+   "rpt_revenue_dashboard",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "type_drift.discount_as_integer",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "changed",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "changed",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "changed",
+   "mart_customer_revenue": "changed",
+   "mart_supplier_performance": "changed",
+   "rpt_revenue_dashboard": "changed",
+   "rpt_regional_summary": "changed"
+  },
+  "fix_targets": [
+   "stg_lineitem"
+  ],
+  "family": "type_drift",
+  "split": "held_in",
+  "what": "a discount of 0.05 becomes 0, so nothing is discounted",
+  "diff": {
+   "find": "l_discount as discount",
+   "replace": "cast(l_discount as integer) as discount"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "stg_lineitem",
+   "int_order_items",
+   "mart_daily_revenue",
+   "mart_customer_revenue",
+   "mart_supplier_performance",
+   "rpt_revenue_dashboard",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "dropped_column.order_date_dropped",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "changed",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "failed",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "stale",
+   "mart_customer_revenue": "stale",
+   "mart_supplier_performance": "stale",
+   "rpt_revenue_dashboard": "stale",
+   "rpt_regional_summary": "stale"
+  },
+  "fix_targets": [
+   "stg_orders"
+  ],
+  "family": "dropped_column",
+  "split": "evolve",
+  "what": "the staging model stops selecting the order date",
+  "diff": {
+   "find": ", o_orderdate as order_date",
+   "replace": ""
+  },
+  "silent": false,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "stg_orders",
+   "int_order_items",
+   "mart_daily_revenue",
+   "mart_customer_revenue",
+   "mart_supplier_performance",
+   "rpt_revenue_dashboard",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "dropped_column.segment_dropped",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "changed",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "failed",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "stale",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "stale",
+   "rpt_regional_summary": "stale"
+  },
+  "fix_targets": [
+   "stg_customer"
+  ],
+  "family": "dropped_column",
+  "split": "held_in",
+  "what": "the staging model stops selecting the market segment",
+  "diff": {
+   "find": ", c_mktsegment as segment",
+   "replace": ""
+  },
+  "silent": false,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "stg_customer",
+   "int_customer_geo",
+   "mart_customer_revenue",
+   "rpt_revenue_dashboard",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "bad_join_key.part_without_supplier",
+  "symptom_node": "rpt_regional_summary",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "ok",
+   "int_part_cost": "deviates",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "ok",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "ok",
+   "rpt_regional_summary": "ok"
+  },
+  "fix_targets": [
+   "int_part_cost"
+  ],
+  "family": "bad_join_key",
+  "split": "evolve",
+  "what": "cost joined on the part alone: one line, every supplier's price",
+  "diff": {
+   "find": " and ps.ps_suppkey = l.supplier_id",
+   "replace": ""
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "int_part_cost",
+   "mart_supplier_performance",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "bad_join_key.order_without_line",
+  "symptom_node": "rpt_regional_summary",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "ok",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "ok",
+   "rpt_regional_summary": "ok"
+  },
+  "fix_targets": [
+   "mart_supplier_performance"
+  ],
+  "family": "bad_join_key",
+  "split": "held_in",
+  "what": "cost joined on the order alone: each line gets every line's cost",
+  "diff": {
+   "find": " and c.line_no = i.line_no",
+   "replace": ""
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": false,
+  "tables_actually_wrong": [
+   "mart_supplier_performance",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "date_window.latest_day_excluded",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "deviates",
+   "mart_customer_revenue": "ok",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "deviates",
+   "rpt_regional_summary": "ok"
+  },
+  "fix_targets": [
+   "mart_daily_revenue"
+  ],
+  "family": "date_window",
+  "split": "evolve",
+  "what": "the window stops one day short of today",
+  "diff": {
+   "find": "order_date <= (select as_of from meta)",
+   "replace": "order_date < (select as_of from meta)"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "mart_daily_revenue",
+   "rpt_revenue_dashboard"
+  ]
+ },
+ {
+  "id": "date_window.trailing_six_days",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "ok",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "ok",
+   "rpt_regional_summary": "ok"
+  },
+  "fix_targets": [
+   "rpt_revenue_dashboard"
+  ],
+  "family": "date_window",
+  "split": "held_in",
+  "what": "a seven-day total that adds up six days",
+  "diff": {
+   "find": "- 7)",
+   "replace": "- 6)"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": false,
+  "tables_actually_wrong": [
+   "rpt_revenue_dashboard"
+  ]
+ },
+ {
+  "id": "null_handling.inner_join_nation",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "deviates",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "ok",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "deviates",
+   "rpt_regional_summary": "deviates"
+  },
+  "fix_targets": [
+   "int_customer_geo"
+  ],
+  "family": "null_handling",
+  "split": "ood",
+  "what": "customers with no nation on file disappear",
+  "diff": {
+   "find": "left join raw.nation n",
+   "replace": "join raw.nation n"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "int_customer_geo",
+   "mart_customer_revenue",
+   "rpt_revenue_dashboard",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "null_handling.cost_not_defaulted",
+  "symptom_node": "rpt_regional_summary",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "ok",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "ok",
+   "rpt_regional_summary": "ok"
+  },
+  "fix_targets": [
+   "mart_supplier_performance"
+  ],
+  "family": "null_handling",
+  "split": "ood",
+  "what": "a line with no supplier price drops out of the margin",
+  "diff": {
+   "find": "sum(i.net_revenue - coalesce(c.supply_cost, 0))",
+   "replace": "sum(i.net_revenue - c.supply_cost)"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": false,
+  "tables_actually_wrong": [
+   "mart_supplier_performance",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "changed_grain.one_row_per_order",
+  "symptom_node": "rpt_revenue_dashboard",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "deviates",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "deviates",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "ok",
+   "rpt_regional_summary": "ok"
+  },
+  "fix_targets": [
+   "int_customer_geo"
+  ],
+  "family": "changed_grain",
+  "split": "ood",
+  "what": "a join added for one more column makes it one row per order",
+  "diff": {
+   "find": "left join raw.region r on r.r_regionkey = n.n_regionkey",
+   "replace": "left join raw.region r on r.r_regionkey = n.n_regionkey left join stg_orders o on o.customer_id = c.customer_id"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "int_customer_geo",
+   "mart_customer_revenue",
+   "rpt_revenue_dashboard",
+   "rpt_regional_summary"
+  ]
+ },
+ {
+  "id": "changed_grain.one_row_per_month",
+  "symptom_node": "rpt_regional_summary",
+  "node_status": {
+   "stg_orders": "ok",
+   "stg_lineitem": "ok",
+   "stg_customer": "ok",
+   "stg_supplier": "ok",
+   "int_order_items": "ok",
+   "int_customer_geo": "ok",
+   "int_part_cost": "ok",
+   "mart_daily_revenue": "ok",
+   "mart_customer_revenue": "deviates",
+   "mart_supplier_performance": "ok",
+   "rpt_revenue_dashboard": "ok",
+   "rpt_regional_summary": "ok"
+  },
+  "fix_targets": [
+   "mart_customer_revenue"
+  ],
+  "family": "changed_grain",
+  "split": "ood",
+  "what": "grouped by month as well, so a customer is several rows",
+  "diff": {
+   "find": "group by g.customer_id, g.region, g.segment",
+   "replace": "group by g.customer_id, g.region, g.segment, date_trunc('month', i.order_date)"
+  },
+  "silent": true,
+  "probe_sees_it_at_the_source": true,
+  "tables_actually_wrong": [
+   "mart_customer_revenue",
+   "rpt_regional_summary"
+  ]
+ }
+]

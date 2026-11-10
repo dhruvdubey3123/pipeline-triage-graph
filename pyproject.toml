@@ -22,10 +22,12 @@ dependencies = [
 mcp = ["mcp>=2.0"]
 llm = ["anthropic>=0.40"]
 local = ["httpx>=0.27"]
-dev = ["pytest>=8", "httpx>=0.27", "mcp>=2.0"]
+# DuckDB up to 1.2 carries the TPC-H generator inside the package. Later versions download it on first use.
+warehouse = ["duckdb>=1.1,<1.3"]
+dev = ["pytest>=8", "httpx>=0.27", "mcp>=2.0", "duckdb>=1.1,<1.3"]
 
 [tool.setuptools]
-packages = ["triage", "evals"]
+packages = ["triage", "triage.warehouse", "evals"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

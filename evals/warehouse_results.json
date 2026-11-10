@@ -1,0 +1,147 @@
+{
+  "scale_factor": 0.01,
+  "incidents": 12,
+  "silent": 10,
+  "invisible_to_every_probe_check": 3,
+  "mode": "rule-based tracer on node health read from the warehouse",
+  "by_split": {
+    "evolve": {
+      "incidents": 4,
+      "target": 2,
+      "cause_only": 1,
+      "none": 1,
+      "wrong": 0
+    },
+    "all": {
+      "incidents": 12,
+      "target": 5,
+      "cause_only": 2,
+      "none": 5,
+      "wrong": 0
+    },
+    "held_in": {
+      "incidents": 4,
+      "target": 1,
+      "cause_only": 1,
+      "none": 2,
+      "wrong": 0
+    },
+    "ood": {
+      "incidents": 4,
+      "target": 2,
+      "cause_only": 0,
+      "none": 2,
+      "wrong": 0
+    }
+  },
+  "rows": [
+    {
+      "id": "type_drift.price_as_integer",
+      "split": "evolve",
+      "edited": "stg_lineitem",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": true,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "target"
+    },
+    {
+      "id": "type_drift.discount_as_integer",
+      "split": "held_in",
+      "edited": "stg_lineitem",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": true,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "target"
+    },
+    {
+      "id": "dropped_column.order_date_dropped",
+      "split": "evolve",
+      "edited": "stg_orders",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": false,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "cause_only"
+    },
+    {
+      "id": "dropped_column.segment_dropped",
+      "split": "held_in",
+      "edited": "stg_customer",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": false,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "cause_only"
+    },
+    {
+      "id": "bad_join_key.part_without_supplier",
+      "split": "evolve",
+      "edited": "int_part_cost",
+      "symptom_node": "rpt_regional_summary",
+      "silent": true,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "none"
+    },
+    {
+      "id": "bad_join_key.order_without_line",
+      "split": "held_in",
+      "edited": "mart_supplier_performance",
+      "symptom_node": "rpt_regional_summary",
+      "silent": true,
+      "probe_sees_it_at_the_source": false,
+      "tracer": "none"
+    },
+    {
+      "id": "date_window.latest_day_excluded",
+      "split": "evolve",
+      "edited": "mart_daily_revenue",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": true,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "target"
+    },
+    {
+      "id": "date_window.trailing_six_days",
+      "split": "held_in",
+      "edited": "rpt_revenue_dashboard",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": true,
+      "probe_sees_it_at_the_source": false,
+      "tracer": "none"
+    },
+    {
+      "id": "null_handling.inner_join_nation",
+      "split": "ood",
+      "edited": "int_customer_geo",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": true,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "none"
+    },
+    {
+      "id": "null_handling.cost_not_defaulted",
+      "split": "ood",
+      "edited": "mart_supplier_performance",
+      "symptom_node": "rpt_regional_summary",
+      "silent": true,
+      "probe_sees_it_at_the_source": false,
+      "tracer": "none"
+    },
+    {
+      "id": "changed_grain.one_row_per_order",
+      "split": "ood",
+      "edited": "int_customer_geo",
+      "symptom_node": "rpt_revenue_dashboard",
+      "silent": true,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "target"
+    },
+    {
+      "id": "changed_grain.one_row_per_month",
+      "split": "ood",
+      "edited": "mart_customer_revenue",
+      "symptom_node": "rpt_regional_summary",
+      "silent": true,
+      "probe_sees_it_at_the_source": true,
+      "tracer": "target"
+    }
+  ]
+}

@@ -159,6 +159,61 @@ tokens-per-minute ceiling and waits it out. A paid tier or a local 120B would be
 
 CI drives the investigator with a scripted model and needs no model at all.
 
+## A real warehouse behind it
+
+The 200 synthetic incidents arrive with every node already labelled `failed`, `stale` or `ok`, and every one of them names
+the broken node outright. `triage/warehouse/` replaces that with something that has to be worked out: TPC-H in DuckDB,
+twelve procedures with real SQL from staging to two reports, and twelve breaks, each a small edit to one procedure written
+as the diff that caused it. Ten of the twelve are silent: the procedure runs, the table fills, and the numbers are wrong.
+
+```
+staging        stg_orders  stg_lineitem  stg_customer  stg_supplier
+intermediate   int_order_items  int_customer_geo  int_part_cost
+marts          mart_daily_revenue  mart_customer_revenue  mart_supplier_performance
+reports        rpt_revenue_dashboard  rpt_regional_summary
+```
+
+Node health is no longer handed over with the incident. `probe.observe` reads it off the warehouse with checks a person on
+call could run in production, none of which need to know the right answer: did the run error, was it skipped, did the
+columns or types change, is the key still unique, does the row count still match the table it is built from, are there more
+nulls than before, did the latest date go backwards. The reference checksum of every table is kept apart from all of that
+and is only used to score a fix.
+
+**What the rule-based tracer does with it** (`python -m evals.warehouse_eval`, 12 incidents, about a second):
+
+| | Evolve | Held in | Held-out families | All |
+|---|---|---|---|---|
+| Incidents | 4 | 4 | 4 | 12 |
+| Named the procedure that was edited | 2 | 1 | 2 | **5** |
+| Named the procedure that errored, with the edited one as its cause | 1 | 1 | 0 | 2 |
+| Found no root cause, so it went to a person | 1 | 2 | 2 | **5** |
+| Named something else | 0 | 0 | 0 | 0 |
+
+On the synthetic set the same tracer scores 100 of 100. Here it finds the edited procedure 5 times in 12, and the reason is
+structural rather than a bug to patch. The tracer walks upstream through unhealthy nodes only, so it stops where the damage
+stops showing: customers dropped by an inner join are missing from the mart built on top as well, the mart's own checks
+pass, and the walk never reaches the join. Three of the twelve breaks change values and nothing else, pass every check, and
+report every node `ok`. It never named the wrong node; when it could not see the cause it said so.
+
+Twelve incidents is a regression set, not a benchmark. Two families, null handling and changed grain, are held out whole so
+that anything later tuned against this set is scored on a kind of failure it has not met.
+
+**Scoring a fix, as two answers.** `Warehouse.outcome` reports `functional` (the report the person complained about holds
+the right rows again) and `integrity` (every table does, and nothing was edited outside what was approved) and never adds
+them together. A test hard-codes the right number into the report: `functional` passes and `integrity` fails, naming the two
+tables still wrong and the procedure changed without approval. A fix written in different SQL that produces the right rows
+passes both.
+
+**What this does not do yet.** The triage graph and Keel still run on the synthetic incidents: the LLM investigator has not
+been run against the warehouse, no model drafts SQL, and Keel does not apply a patch to it. Those are the next steps, and
+none of them is claimed here.
+
+```bash
+pip install -e ".[dev]"
+python -m evals.warehouse_eval            # rebuild, break, trace, write evals/warehouse_results.json
+pytest -q tests/test_warehouse.py
+```
+
 ## Running inside the agent harness
 
 Triage stops at the human gate. What happens after approval, actually applying the fix, now runs inside
