@@ -134,3 +134,114 @@ def test_the_committed_manifest_and_results_are_what_the_code_produces():
     manifest, results = warehouse_eval.run()
     assert json.loads(warehouse_eval.MANIFEST.read_text()) == manifest
     assert json.loads(warehouse_eval.RESULTS.read_text()) == results
+
+
+# ---------------------------------------------------------------- the investigator on the warehouse
+
+class Scripted:
+    """A chat model that makes the calls it is given, in order, then answers in plain text."""
+    model = "scripted"
+
+    def __init__(self, calls, then="I cannot find it."):
+        self.calls, self.then, self.seen = list(calls), then, []
+
+    def chat(self, messages, tools):
+        self.seen.append((messages, tools))
+        if not self.calls:
+            return {"content": self.then}
+        name, args = self.calls.pop(0)
+        return {"tool_calls": [{"id": f"c{len(self.seen)}", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+
+def _incident(wh, b):
+    symptom = next(r for r in REPORTS if r in wh.affected())
+    return {"id": b.id, "symptom_node": symptom, "symptom": wh.complaint(symptom), "node_status": observe(wh)}
+
+
+def test_the_complaint_names_the_numbers_and_not_the_cause(wh):
+    with broken(wh, "date_window.trailing_six_days"):
+        assert wh.complaint("rpt_revenue_dashboard") == "trailing_7d_revenue in rpt_revenue_dashboard looks wrong"
+    with broken(wh, "dropped_column.order_date_dropped"):
+        assert wh.complaint("rpt_revenue_dashboard") == "rpt_revenue_dashboard has not refreshed"
+    with broken(wh, "null_handling.inner_join_nation"):
+        assert wh.complaint("rpt_revenue_dashboard") == "rpt_revenue_dashboard has 25 rows where there were 30"
+
+
+def test_the_model_can_read_the_sql_that_every_health_check_passed(wh):
+    from triage.warehouse.investigate import investigate_warehouse
+
+    with broken(wh, "date_window.trailing_six_days") as b:
+        model = Scripted([("upstream", {"node": "rpt_revenue_dashboard"}),
+                          ("read_sql", {"node": "rpt_revenue_dashboard"}),
+                          ("submit_diagnosis", {"fix_target": "rpt_revenue_dashboard",
+                                                "reason": "the trailing total subtracts 6, so it sums six days"}),
+                          ("read_sql", {"node": "stg_orders"})])
+        inv = investigate_warehouse(wh, as_dag(), _incident(wh, b), model)
+        assert inv.submitted and inv.fix_target == b.node and inv.category is None
+        assert "- 6)" in inv.steps[1]["result"], "it saw the deployed SQL, not the reference"
+        assert len(inv.steps) == 3, "the first valid diagnosis ends it"
+        offered = {t["function"]["name"] for t in model.seen[0][1]}
+        assert offered == {"pipeline", "status", "upstream", "profile", "read_sql", "submit_diagnosis"}
+
+
+def test_a_model_that_cannot_find_it_says_so_and_nothing_is_submitted(wh):
+    from triage.warehouse.investigate import investigate_warehouse
+
+    with broken(wh, "null_handling.cost_not_defaulted") as b:
+        inv = investigate_warehouse(wh, as_dag(), _incident(wh, b),
+                                    Scripted([("profile", {"node": "mart_supplier_performance"})]))
+        assert not inv.submitted and inv.fix_target is None and inv.answer == "I cannot find it."
+
+
+def test_a_node_that_is_not_in_the_pipeline_comes_back_as_an_error_it_can_correct(wh):
+    from triage.warehouse.investigate import investigate_warehouse
+
+    with broken(wh, "bad_join_key.part_without_supplier") as b:
+        inv = investigate_warehouse(wh, as_dag(), _incident(wh, b), Scripted([
+            ("read_sql", {"node": "raw.partsupp"}),
+            ("submit_diagnosis", {"fix_target": "partsupp", "reason": "x"}),
+            ("profile", {"node": "int_part_cost"}),
+            ("submit_diagnosis", {"fix_target": "int_part_cost", "reason": "joined on the part alone"})]))
+        assert [s["ok"] for s in inv.steps] == [False, False, True, True] and inv.fix_target == b.node
+        assert "237636 rows (last good run 60175)" in inv.steps[2]["result"]
+
+
+def test_the_investigator_is_told_no_family_names_and_has_no_way_to_ask_what_changed(wh):
+    from triage.warehouse.investigate import INSTRUCTIONS, tools
+
+    with broken(wh, "changed_grain.one_row_per_order") as b:
+        specs = tools(wh, as_dag(), _incident(wh, b))
+    text = (INSTRUCTIONS + " ".join(t.name + " " + t.description + json.dumps(t.args.model_json_schema()) for t in specs)).lower()
+    for word in ("grain", "null handling", "join key", "type drift", "date window", "dropped column", "what changed", "changed since", "recently"):
+        assert word not in text
+
+
+def test_scoring_a_model_run_counts_what_todays_cross_check_would_hold_back():
+    """A model that reads the SQL is right on a break the tracer cannot see, and exact agreement with
+    the tracer sends that right answer to a person."""
+    answers = {b.id: b.node for b in BREAKS}
+
+    class Oracle:
+        model = "oracle"
+
+        def chat(self, messages, tools):
+            if any(m["role"] == "tool" for m in messages):
+                return {"content": "done"}
+            inc = messages[1]["content"].split(":")[0].removeprefix("Incident ")
+            return {"tool_calls": [{"id": "c", "function": {"name": "submit_diagnosis", "arguments": json.dumps(
+                {"fix_target": answers[inc], "reason": "read the SQL"})}}]}
+
+    summary = warehouse_eval.run_investigator(Oracle())["summary"]["all"]
+    assert summary["model right"] == 12 and summary["tracer named the edited procedure"] == 5
+    assert summary["model right where the tracer found nothing"] == 5
+    assert summary["right diagnoses held back because the tracer could not confirm them"] == 7
+    assert summary["wrong diagnoses that would reach the approval gate"] == 0
+
+
+def test_the_probe_answers_the_graphs_data_checks(wh):
+    from triage.warehouse import WarehouseProbe
+
+    with broken(wh, "changed_grain.one_row_per_order"):
+        probe = WarehouseProbe(wh)
+        assert "share a key (customer_id) that was unique" in probe.check("int_customer_geo", {})
+        assert probe.check("stg_orders", {}) is None

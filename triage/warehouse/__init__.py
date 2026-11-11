@@ -2,6 +2,6 @@
 from .breaks import BREAKS, Break, OOD_FAMILIES
 from .build import DEFAULT_AS_OF, Warehouse
 from .pipeline import NODES, as_dag
-from .probe import observe
+from .probe import WarehouseProbe, observe
 
-__all__ = ["BREAKS", "Break", "DEFAULT_AS_OF", "NODES", "OOD_FAMILIES", "Warehouse", "as_dag", "observe"]
+__all__ = ["BREAKS", "Break", "DEFAULT_AS_OF", "NODES", "OOD_FAMILIES", "Warehouse", "WarehouseProbe", "as_dag", "observe"]

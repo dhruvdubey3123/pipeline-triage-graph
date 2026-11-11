@@ -67,3 +67,16 @@ def observe(wh: Warehouse, reference_cycle: int = 1) -> dict[str, dict]:
         problems = _checks(wh, n, now, before)
         status[n.id] = {"status": "deviates", "note": "; ".join(problems)} if problems else {"status": "ok"}
     return status
+
+
+class WarehouseProbe:
+    """triage.adapters.DataProbe, answered by the warehouse rather than by notes in the incident."""
+
+    def __init__(self, wh: Warehouse):
+        self.wh = wh
+
+    def check(self, node_id: str, incident: dict) -> str | None:
+        s = observe(self.wh).get(node_id)
+        if s is None or s["status"] == "ok":
+            return None
+        return s.get("error") or s.get("note") or "; ".join(s.get("changes", [])) or s["status"]

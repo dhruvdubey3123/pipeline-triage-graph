@@ -24,7 +24,7 @@ import json
 
 import duckdb
 
-from .pipeline import BY_ID, NODES
+from .pipeline import BY_ID, NODES, REPORTS
 
 DEFAULT_AS_OF = dt.date(2026, 11, 9)
 RAW = ("lineitem", "orders", "customer", "supplier", "partsupp", "nation", "region")
@@ -77,6 +77,9 @@ class Warehouse:
         for n in NODES:
             rows, checksum = self.checksum(n.id)
             db.execute("insert into golden values (?, ?, ?)", [n.id, rows, checksum])
+        db.execute("create schema reference")
+        for r in REPORTS:                      # small, and only read to word the complaint
+            db.execute(f'create table reference."{r}" as select * from "{r}"')
         return self
 
     # ------------------------------------------------------------------ procedures
@@ -152,6 +155,22 @@ class Warehouse:
         rows, total = self.db.execute(
             f'select count(*), coalesce(sum(hash(t)::hugeint), 0) from "{node}" t').fetchone()
         return rows, str(total)
+
+    def complaint(self, report: str) -> str:
+        """What the person looking at the report would say: which numbers are off, not why. They know
+        the figures they expected, so this may read the reference copy; nothing else in triage does."""
+        if self.last_run(report)["status"] != "success":
+            return f"{report} has not refreshed"
+        now = self.db.execute(f'select count(*) from "{report}"').fetchone()[0]
+        ref = self.db.execute(f'select count(*) from reference."{report}"').fetchone()[0]
+        if now != ref:
+            return f"{report} has {now} rows where there were {ref}"
+        cols = [c[0] for c in self.db.execute(f'describe reference."{report}"').fetchall()]
+        have = {c[0] for c in self.db.execute(f'describe "{report}"').fetchall()}
+        off = [c for c in cols if c in have and self.db.execute(
+            f'select (select coalesce(sum(hash("{c}")::hugeint), 0) from "{report}") '
+            f'<> (select coalesce(sum(hash("{c}")::hugeint), 0) from reference."{report}")').fetchone()[0]]
+        return f"{', '.join(off) or 'the numbers'} in {report} {'looks' if len(off) == 1 else 'look'} wrong"
 
     # ------------------------------------------------------------------ scoring a fix
 

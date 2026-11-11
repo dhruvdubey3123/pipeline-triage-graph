@@ -204,9 +204,27 @@ them together. A test hard-codes the right number into the report: `functional` 
 tables still wrong and the procedure changed without approval. A fix written in different SQL that produces the right rows
 passes both.
 
-**What this does not do yet.** The triage graph and Keel still run on the synthetic incidents: the LLM investigator has not
-been run against the warehouse, no model drafts SQL, and Keel does not apply a patch to it. Those are the next steps, and
-none of them is claimed here.
+**A model on the same incidents.** `triage/warehouse/investigate.py` points the LLM investigator at the warehouse with
+read-only tools: the pipeline, the health checks, what each table looked like on this run against the last good one, and the
+SQL of every procedure as deployed. It has no tool that says what changed recently, because the procedure with a new
+definition is the answer, and it is given no list of failure types, because naming them is a hint about which exist. If it
+cannot find the cause it is told to say so, which ends the investigation with no diagnosis and sends the incident to a
+person. This is the first place a model can be right where the tracer has nothing to say, since it can read SQL that every
+health check passed.
+
+The run also records what the cross-check would do with each answer as it stands today. A diagnosis reaches the approval gate
+only when it names the node the tracer named, so on the 7 incidents where the tracer does not name the edited procedure, a
+right answer from the model is held back for a person. A test pins that number with a model that is always right.
+
+```bash
+TRIAGE_BASE_URL=https://api.groq.com/openai/v1 TRIAGE_MODEL=openai/gpt-oss-120b TRIAGE_API_KEY=... \
+  python -m evals.warehouse_eval --investigator      # writes evals/warehouse_results_llm.json after every incident
+```
+
+No model result is reported here yet. CI drives the investigator with a scripted model and needs no key.
+
+**What this does not do yet.** The full triage graph and Keel still run on the synthetic incidents: no model drafts SQL, and
+Keel does not apply a patch to the warehouse. Those are the next steps, and none of them is claimed here.
 
 ```bash
 pip install -e ".[dev]"

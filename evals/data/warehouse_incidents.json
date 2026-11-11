@@ -2,6 +2,7 @@
  {
   "id": "type_drift.price_as_integer",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "revenue, trailing_7d_revenue in rpt_revenue_dashboard look wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "changed",
@@ -41,6 +42,7 @@
  {
   "id": "type_drift.discount_as_integer",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "revenue, trailing_7d_revenue in rpt_revenue_dashboard look wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "changed",
@@ -80,6 +82,7 @@
  {
   "id": "dropped_column.order_date_dropped",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "rpt_revenue_dashboard has not refreshed",
   "node_status": {
    "stg_orders": "changed",
    "stg_lineitem": "ok",
@@ -119,6 +122,7 @@
  {
   "id": "dropped_column.segment_dropped",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "rpt_revenue_dashboard has not refreshed",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -156,6 +160,7 @@
  {
   "id": "bad_join_key.part_without_supplier",
   "symptom_node": "rpt_regional_summary",
+  "symptom": "margin_rate in rpt_regional_summary looks wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -191,6 +196,7 @@
  {
   "id": "bad_join_key.order_without_line",
   "symptom_node": "rpt_regional_summary",
+  "symptom": "margin_rate in rpt_regional_summary looks wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -225,6 +231,7 @@
  {
   "id": "date_window.latest_day_excluded",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "latest_day, trailing_7d_revenue in rpt_revenue_dashboard look wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -259,6 +266,7 @@
  {
   "id": "date_window.trailing_six_days",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "trailing_7d_revenue in rpt_revenue_dashboard looks wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -292,6 +300,7 @@
  {
   "id": "null_handling.inner_join_nation",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "rpt_revenue_dashboard has 25 rows where there were 30",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -328,6 +337,7 @@
  {
   "id": "null_handling.cost_not_defaulted",
   "symptom_node": "rpt_regional_summary",
+  "symptom": "margin_rate in rpt_regional_summary looks wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -362,6 +372,7 @@
  {
   "id": "changed_grain.one_row_per_order",
   "symptom_node": "rpt_revenue_dashboard",
+  "symptom": "revenue in rpt_revenue_dashboard looks wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",
@@ -398,6 +409,7 @@
  {
   "id": "changed_grain.one_row_per_month",
   "symptom_node": "rpt_regional_summary",
+  "symptom": "customers in rpt_regional_summary looks wrong",
   "node_status": {
    "stg_orders": "ok",
    "stg_lineitem": "ok",

@@ -298,10 +298,15 @@ def run_tool(spec: ToolSpec, raw_args: Any) -> tuple[bool, str]:
 
 
 def investigate(incident: dict, dag: PipelineDAG, library: CaseLibrary, model: ChatModel,
-                max_steps: int = 14) -> Investigation:
-    specs = {t.name: t for t in tools(dag, library, incident)}
+                max_steps: int = 14, specs: list[ToolSpec] | None = None, instructions: str = INSTRUCTIONS,
+                task_text: str | None = None) -> Investigation:
+    """`specs`, `instructions` and `task_text` let the same loop run over a different set of read-only
+    tools (triage/warehouse/investigate.py runs it against a real warehouse). The terminal tool keeps
+    its name, and the first valid call to it still ends the investigation."""
+    specs = {t.name: t for t in (specs if specs is not None else tools(dag, library, incident))}
     schemas = [t.schema() for t in specs.values()]
-    messages: list[dict] = [{"role": "system", "content": INSTRUCTIONS}, {"role": "user", "content": task(incident)}]
+    messages: list[dict] = [{"role": "system", "content": instructions},
+                            {"role": "user", "content": task_text or task(incident)}]
     out = Investigation()
     for n in range(max_steps):
         try:
@@ -331,7 +336,7 @@ def investigate(incident: dict, dag: PipelineDAG, library: CaseLibrary, model: C
         messages.append({"role": "tool", "tool_call_id": cid, "content": text})
         if ok and name == TERMINAL:
             out.submitted = True
-            out.category, out.fix_target = args["category"], args["fix_target"]
+            out.category, out.fix_target = args.get("category"), args["fix_target"]
             out.cause, out.reason = args.get("cause") or "", (args.get("reason") or "").strip()
             out.plan = derive_plan(dag, out.fix_target)
             break                                   # the first valid answer stands
