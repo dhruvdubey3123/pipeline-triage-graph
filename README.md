@@ -341,8 +341,8 @@ experiment was available, so it tried its first idea three times and did not rea
 same way has the same shape. Both sit in the held-out splits, so changing the prompt or the tools to fix them would be
 tuning on the test. The honest route is more value-only breaks in the tunable split, and that is the next piece of work.
 
-**How far this goes.** Twelve incidents, one run per arm: counts, not rates. Runs vary: across five runs the model alone
-fixed 4 of 12 twice, but not the same four. The excluded-day break was fixed in one checker run and not in the next. The
+**How far this goes.** Twelve incidents, one run per arm: counts, not rates. Runs vary: the model alone fixed 4 of 12 on
+both hosts, but not the same four. The excluded-day break was fixed in one checker run and not in the next. The
 harness was changed between runs in response to what the runs showed (below), so the final numbers are in-sample for those
 changes.
 
