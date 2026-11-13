@@ -340,7 +340,7 @@ This run is not a clean measurement and is kept because of what it exposed:
 
 - **With the checker the model went to the right node on all 7 check-visible incidents it reached**, against 2 of 9 alone,
   and no unverified fix reached the end, against 7 alone.
-- **The harness refused 7 calls in 6 incidents**, 5 of them a fix proposed for a node the model had not checked. It had been
+- **The harness refused 7 calls in 6 incidents**, 6 of them a fix proposed for a node the model had not checked. It had been
   told to check first every time.
 - **Three verified fixes were lost to a rule that asked for too much.** The model rehearsed a fix, the rehearsal passed, and
   it stopped, once announcing "Fix Submitted" in prose. The closing call added nothing the harness needed, so a verified
