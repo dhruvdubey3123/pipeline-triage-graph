@@ -296,7 +296,24 @@ No model result for this is reported yet. The verification compares against the 
 on a frozen copy of the data where the last good output is known: it is a rehearsal before a person approves, not a check
 that can run in production. "Right" means the same rows on this data.
 
-CI drives the investigator and the fix loop with scripted models and needs no key.
+**The checker in the model's hands, and in the harness.** `--fixer --checker` runs the same task with three more tools:
+`where_checks_fail` (where the health checks first fail, or that they fail nowhere), `check_node` (supported, contradicted
+or unverified, with the reason) and `try_fix` (run this SQL on a rehearsal copy; three tries; nothing is kept). The model is
+told to check before it tries and to try before it submits. Being told is not the same as doing it, so each step is also
+enforced where the model cannot skip it: a node it has not checked cannot be tried, a node the checks contradict cannot be
+tried, and only the exact SQL a rehearsal passed can be submitted. Every refusal is recorded, since how often the harness
+had to refuse is the measure of how far the instruction alone would have got. The rehearsal says whether the report and the
+rest of the warehouse came out right and nothing more; it never names which tables are still wrong, because the first of
+those is the answer. A model that runs out of tries cannot submit, and the incident goes to a person.
+
+```bash
+python -m evals.warehouse_eval --fixer --checker   # writes evals/warehouse_fix_checked_results_llm.json
+```
+
+No model result for this is reported yet either. Applying a submitted fix for real is still a separate step behind a
+person's approval, and that step is not built here.
+
+CI drives the investigator and both fix loops with scripted models and needs no key.
 
 **What this does not do yet.** The full triage graph and Keel still run on the synthetic incidents. The fix loop above
 applies SQL to the warehouse directly; it does not go through Keel's journal or the approval gate yet.

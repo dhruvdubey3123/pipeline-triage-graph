@@ -22,12 +22,14 @@ would pass.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 
 import duckdb
 from pydantic import BaseModel, Field
 
+from .. import evidence
 from ..dag import PipelineDAG
-from ..investigator import TERMINAL, ChatModel, Investigation, ToolSpec, investigate
+from ..investigator import TERMINAL, ChatModel, Investigation, NodeArg, ToolSpec, investigate
 from .build import Warehouse
 from .investigate import tools as read_tools
 
@@ -48,6 +50,11 @@ class Fix(BaseModel):
     fix_target: str = Field(description="the node whose SQL has to be replaced")
     sql: str = Field(description="the complete replacement SQL for that node: one SELECT statement")
     reason: str = Field(description="what was wrong and what you changed, in one or two sentences")
+
+
+class Attempt(BaseModel):
+    fix_target: str = Field(description="the node whose SQL to replace")
+    sql: str = Field(description="the complete replacement SQL for that node: one SELECT statement")
 
 
 def validate(wh: Warehouse, dag: PipelineDAG, node: str, sql: str) -> str:
@@ -100,3 +107,135 @@ def apply_and_verify(wh: Warehouse, node: str, sql: str, symptom_node: str) -> d
         wh.run_cycle()
     out["rolled_back"] = not out["kept"]
     return out
+
+
+# ---------------------------------------------------------------- the same loop, with the checker in the model's hands
+
+MAX_TRIES = 3
+
+CHECKED_INSTRUCTIONS = (
+    "You are on call for a data warehouse. Every node is a SQL procedure that rebuilds one table from the tables it "
+    "reads. A person says a report looks wrong. Find the one procedure whose SQL is wrong, write its corrected SQL, "
+    "and prove the fix works before you submit it. Work in this order. First call where_checks_fail. If it names a "
+    "node, start there. If it says nowhere, the health checks cannot see this problem: read the SQL of the nodes "
+    "upstream of the report and find it yourself. Call check_node on the node you blame; if it is contradicted, the "
+    "reason tells you where to look instead. Then call try_fix with that node and its complete replacement SELECT. It "
+    f"runs your SQL on a rehearsal copy and tells you whether the warehouse came out right. You have {MAX_TRIES} tries. "
+    "Change as little as possible and keep every column the procedure already returns. Call submit_diagnosis only "
+    "with a fix that try_fix verified. If you run out of tries, do not submit: say so in plain text and the incident "
+    "goes to a person."
+)
+
+
+@dataclass
+class Session:
+    """What the model did with the checker, and every time the harness had to hold the line for it."""
+    asked_where: bool = False
+    checked: dict = field(default_factory=dict)        # node -> verdict
+    tries: int = 0
+    verified: set = field(default_factory=set)         # (node, sql) pairs a rehearsal passed
+    verified_on_try: int | None = None
+    refusals: list = field(default_factory=list)       # reasons the harness refused a call
+
+
+def rehearse(wh: Warehouse, node: str, sql: str, symptom_node: str) -> dict:
+    """Run a fix and put everything back, whatever the result. Applying for real is a separate step
+    that happens after a person approves."""
+    prior = wh.sql(node)
+    wh.set_sql(node, sql)
+    wh.run_cycle()
+    out = wh.outcome(symptom_node, allowed=(node,))
+    wh.set_sql(node, prior)
+    wh.run_cycle()
+    return out
+
+
+def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Session) -> list[ToolSpec]:
+    """The checker as tools the model calls, and as rules it cannot skip.
+
+    The model is told to check before it tries and to try before it submits. Being told is not the
+    same as doing it, so each of those is also enforced here: an unchecked node cannot be tried, a
+    contradicted node cannot be tried, and only SQL a rehearsal passed can be submitted. Every
+    refusal is recorded, because how often the harness had to refuse is the measure of how far the
+    instruction alone would have got.
+
+    The rehearsal says whether the report and the rest of the warehouse came out right, and nothing
+    more. It does not name which tables are still wrong: the first of those is the answer.
+    """
+    status, symptom = incident["node_status"], incident["symptom_node"]
+
+    def refuse(why: str) -> None:
+        session.refusals.append(why)
+        raise ValueError(why)
+
+    def where_checks_fail() -> str:
+        session.asked_where = True
+        first = evidence.first_failures(dag, status, symptom)
+        if not first:
+            return ("nowhere: every health check passes at and upstream of the report. The checks cannot see this "
+                    "problem. Read the SQL of the nodes upstream of the report.")
+        return "checks first fail at: " + ", ".join(first) + ". Nothing upstream of there fails a check."
+
+    def check_node(node: str) -> str:
+        if node not in dag.nodes:
+            raise ValueError(f"'{node}' is not in this pipeline. Call pipeline to see the nodes.")
+        ev = evidence.check(dag, status, symptom, node)
+        session.checked[node] = ev.verdict
+        return f"{ev.verdict}: {ev.why}"
+
+    def gate(node: str) -> None:
+        if node not in session.checked:
+            refuse(f"call check_node on {node} before proposing a fix for it")
+        if session.checked[node] == evidence.CONTRADICTED:
+            refuse(f"the checks contradict {node} as the cause, so a fix there is not accepted. Call check_node "
+                   "on another node.")
+
+    def try_fix(fix_target: str, sql: str) -> str:
+        gate(fix_target)
+        if session.tries >= MAX_TRIES:
+            refuse(f"all {MAX_TRIES} tries are used. Do not submit: say in plain text that you could not verify a fix.")
+        clean = validate(wh, dag, fix_target, sql)
+        session.tries += 1
+        out = rehearse(wh, fix_target, clean, symptom)
+        left = MAX_TRIES - session.tries
+        if out["functional"] and out["integrity"]:
+            session.verified.add((fix_target, clean))
+            session.verified_on_try = session.verified_on_try or session.tries
+            return "verified: the report and every other table came out right. Submit exactly this fix."
+        if out["functional"]:
+            return (f"not verified: the report came out right, but other tables in the warehouse did not. The cause is "
+                    f"not fixed. {left} tries left.")
+        return f"not verified: the report is still wrong. {left} tries left."
+
+    def submit(fix_target: str, sql: str, reason: str = "") -> str:
+        gate(fix_target)
+        if (fix_target, validate(wh, dag, fix_target, sql)) not in session.verified:
+            refuse("only a fix that try_fix verified can be submitted, with the same node and the same SQL")
+        return f"recorded: replace the SQL of {fix_target}"
+
+    class NoArgs(BaseModel):
+        pass
+
+    read = [t for t in read_tools(wh, dag, incident) if t.name != TERMINAL]
+    return read + [
+        ToolSpec("where_checks_fail", "Where the health checks first fail upstream of the report, or that they fail "
+                 "nowhere. Call this first.", NoArgs, where_checks_fail),
+        ToolSpec("check_node", "Check one node as the cause against the health checks: supported, contradicted or "
+                 "unverified, with the reason. Required before a fix for that node.", NodeArg, check_node),
+        ToolSpec("try_fix", f"Run a fix on a rehearsal copy and learn whether the warehouse came out right. Nothing is "
+                 f"kept. {MAX_TRIES} tries.", Attempt, try_fix),
+        ToolSpec(TERMINAL, "Submit a fix that try_fix verified: the same node and the same SQL. Call this once.",
+                 Fix, submit),
+    ]
+
+
+def draft_checked(wh: Warehouse, dag: PipelineDAG, incident: dict, model: ChatModel,
+                  max_steps: int = 26) -> tuple[Investigation, str | None, Session]:
+    session = Session()
+    task = (f"Incident {incident.get('id')}: {incident.get('symptom')}. "
+            "Find the procedure whose SQL is wrong, verify a fix for it, and submit it.")
+    inv = investigate(incident, dag, None, model, max_steps=max_steps, specs=checked_tools(wh, dag, incident, session),
+                      instructions=CHECKED_INSTRUCTIONS, task_text=task)
+    if not inv.submitted:
+        return inv, None, session
+    return inv, validate(wh, dag, inv.fix_target, inv.steps[-1]["args"]["sql"]), session

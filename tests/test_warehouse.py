@@ -369,3 +369,110 @@ def test_scoring_a_fix_run_keeps_the_two_answers_apart():
     assert summary["all"]["fixed"] == 12 and summary["all"]["functional"] == 12 and summary["all"]["integrity"] == 12
     assert summary["no check sees it"] == {"incidents": 3, "fixed": 3, "report came back, warehouse still wrong": 0,
                                            "did not fix it": 0, "no fix submitted": 0, "functional": 3, "integrity": 3}
+
+
+# ---------------------------------------------------------------- the checker in the model's hands, and in the harness
+
+def test_the_model_checks_rehearses_and_submits_and_the_rehearsal_keeps_nothing(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "bad_join_key.part_without_supplier") as b:
+        inc, deployed = _incident(wh, b), wh.sql(b.node)
+        inv, sql, session = fix.draft_checked(wh, as_dag(), inc, Scripted([
+            ("where_checks_fail", {}), ("check_node", {"node": b.node}),
+            ("try_fix", {"fix_target": b.node, "sql": BY_ID[b.node].sql}),
+            _fix_call(b.node, BY_ID[b.node].sql)]))
+        assert "checks first fail at: int_part_cost" in inv.steps[0]["result"]
+        assert inv.steps[1]["result"].startswith("supported") and inv.steps[2]["result"].startswith("verified")
+        assert inv.submitted and sql == BY_ID[b.node].sql
+        assert session.asked_where and session.tries == 1 and session.verified_on_try == 1 and session.refusals == []
+        assert wh.sql(b.node) == deployed, "rehearsing and submitting deploy nothing"
+
+
+def test_the_harness_refuses_a_fix_for_a_node_the_model_never_checked(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "bad_join_key.part_without_supplier") as b:
+        inv, sql, session = fix.draft_checked(wh, as_dag(), _incident(wh, b), Scripted([
+            ("try_fix", {"fix_target": b.node, "sql": BY_ID[b.node].sql}), _fix_call(b.node, BY_ID[b.node].sql)]))
+        assert sql is None and not inv.submitted and session.tries == 0
+        assert [s["ok"] for s in inv.steps] == [False, False] and len(session.refusals) == 2
+        assert "call check_node on int_part_cost" in inv.steps[0]["result"]
+
+
+def test_the_harness_refuses_a_fix_at_a_node_the_checks_contradict(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "bad_join_key.part_without_supplier") as b:
+        report = BY_ID["rpt_regional_summary"]
+        inv, sql, session = fix.draft_checked(wh, as_dag(), _incident(wh, b), Scripted([
+            ("check_node", {"node": report.id}), ("try_fix", {"fix_target": report.id, "sql": report.sql})]))
+        assert inv.steps[0]["result"].startswith("contradicted") and "int_part_cost" in inv.steps[0]["result"]
+        assert sql is None and session.tries == 0 and "contradict" in session.refusals[0]
+
+
+def test_only_sql_a_rehearsal_passed_can_be_submitted(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "date_window.trailing_six_days") as b:
+        good = wh.sql(b.node).replace("- 6)", "- 7)")
+        inv, sql, session = fix.draft_checked(wh, as_dag(), _incident(wh, b), Scripted([
+            ("where_checks_fail", {}), ("check_node", {"node": b.node}),
+            _fix_call(b.node, good),                                              # never rehearsed
+            ("try_fix", {"fix_target": b.node, "sql": good}),
+            _fix_call(b.node, good.replace("- 7)", "- 8)")),                      # not the SQL that passed
+            _fix_call(b.node, good)]))
+        assert inv.steps[0]["result"].startswith("nowhere") and inv.steps[1]["result"].startswith("unverified")
+        assert [s["ok"] for s in inv.steps] == [True, True, False, True, False, True]
+        assert sql == good and len(session.refusals) == 2
+
+
+def test_three_failed_tries_end_it_and_nothing_can_be_submitted(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "date_window.trailing_six_days") as b:
+        deployed = wh.sql(b.node)
+        wrong = [deployed.replace("- 6)", f"- {n})") for n in (3, 4, 5, 2)]
+        inv, sql, session = fix.draft_checked(wh, as_dag(), _incident(wh, b), Scripted(
+            [("check_node", {"node": b.node})] + [("try_fix", {"fix_target": b.node, "sql": w}) for w in wrong]
+            + [_fix_call(b.node, wrong[0])], then="I could not verify a fix."))
+        assert session.tries == 3 and sql is None and inv.answer == "I could not verify a fix."
+        assert "0 tries left" in inv.steps[3]["result"] and "all 3 tries are used" in inv.steps[4]["result"]
+        assert wh.sql(b.node) == deployed
+
+
+def test_the_rehearsal_never_says_which_tables_are_still_wrong(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "bad_join_key.part_without_supplier") as b:
+        session = fix.Session()
+        tools = {t.name: t for t in fix.checked_tools(wh, as_dag(), _incident(wh, b), session)}
+        report = BY_ID["rpt_regional_summary"]
+        right = wh.db.execute("select margin_rate from reference.rpt_regional_summary limit 1").fetchone()[0]
+        shortcut = report.sql.replace("(select sum(margin) / sum(revenue) from mart_supplier_performance)", f"{right!r}::double")
+        session.checked[report.id] = "unverified"           # as if the checks had nothing to say about it
+        said = tools["try_fix"].fn(fix_target=report.id, sql=shortcut)
+        assert said.startswith("not verified: the report came out right, but other tables")
+        assert not any(n.id in said for n in NODES)
+
+
+def test_a_model_that_uses_the_checker_well_fixes_all_twelve_on_the_first_try():
+    reference = {b.id: (b.node, BY_ID[b.node].sql) for b in BREAKS}
+
+    class Careful:
+        model = "careful"
+
+        def chat(self, messages, tools):
+            node, sql = reference[messages[1]["content"].split(":")[0].removeprefix("Incident ")]
+            done = sum(m["role"] == "tool" for m in messages)
+            plan = [("where_checks_fail", {}), ("check_node", {"node": node}), ("try_fix", {"fix_target": node, "sql": sql}),
+                    ("submit_diagnosis", {"fix_target": node, "sql": sql, "reason": "restored"})]
+            if done >= len(plan):
+                return {"content": "done"}
+            return {"tool_calls": [{"id": f"c{done}", "function": {"name": plan[done][0], "arguments": json.dumps(plan[done][1])}}]}
+
+    res = warehouse_eval.run_fixer(Careful(), checker=True)
+    summary = res["summary"]["all"]
+    assert summary["fixed"] == 12 and summary["fixed on the first try"] == 12 and summary["tries"] == 12
+    assert summary["harness refusals"] == 0 and summary["asked where checks fail"] == 12
+    assert res["summary"]["no check sees it"]["fixed"] == 3

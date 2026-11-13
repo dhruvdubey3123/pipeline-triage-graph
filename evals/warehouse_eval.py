@@ -7,6 +7,9 @@
                                               # warehouse tools; writes evals/warehouse_results_llm.json
     python -m evals.warehouse_eval --fixer    # the model drafts SQL for each break; a fix is kept only if
                                               # the warehouse is right again; writes warehouse_fix_results_llm.json
+    python -m evals.warehouse_eval --fixer --checker
+                                              # the same, with the checker and a rehearsal as tools the model
+                                              # has to use; writes warehouse_fix_checked_results_llm.json
 
 For every break: build nothing new, edit one procedure, run the nightly cycle, read node health off
 the warehouse with the probe, and hand the tracer the first report that came out wrong. Then put the
@@ -40,6 +43,7 @@ MANIFEST = ROOT / "evals/data/warehouse_incidents.json"
 RESULTS = ROOT / "evals/warehouse_results.json"
 LLM_RESULTS = ROOT / "evals/warehouse_results_llm.json"
 FIX_RESULTS = ROOT / "evals/warehouse_fix_results_llm.json"
+CHECKED_FIX_RESULTS = ROOT / "evals/warehouse_fix_checked_results_llm.json"
 
 
 def each_break(wh: Warehouse):
@@ -223,7 +227,8 @@ def rescore(path: Path) -> dict:
     return res
 
 
-def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max_steps: int = 20) -> dict:
+def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max_steps: int | None = None,
+              checker: bool = False) -> dict:
     """The model drafts SQL for each break, and the fix is scored by running it.
 
     A fix counts only when the report is right again and so is every other table, with one procedure
@@ -232,13 +237,19 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
     from triage.warehouse import fix
 
     wh, dag, rows = Warehouse().build(), as_dag(), []
-    res = {"model": getattr(model, "model", "?"), "mode": "model drafts SQL; kept only if the warehouse is right again",
+    res = {"model": getattr(model, "model", "?"),
+           "mode": ("model drafts SQL with the checker as tools it must use; only a rehearsed fix can be submitted"
+                    if checker else "model drafts SQL; kept only if the warehouse is right again"),
            "incidents": 0, "rows": rows}
     for inc in each_break(wh):
         if (only and inc["id"] not in only) or inc["symptom_node"] is None:
             continue
         print(f"  {inc['id']} ...", file=sys.stderr, flush=True)
-        inv, sql = fix.draft(wh, dag, inc, model, max_steps=max_steps)
+        session = None
+        if checker:
+            inv, sql, session = fix.draft_checked(wh, dag, inc, model, max_steps=max_steps or 26)
+        else:
+            inv, sql = fix.draft(wh, dag, inc, model, max_steps=max_steps or 20)
         edited = inc["label"]["fix_targets"][0]
         row = {"id": inc["id"], "split": inc["label"]["split"], "edited": edited, "symptom": inc["symptom"],
                "checks_see_it": inc["label"]["probe_sees_it_at_the_source"],
@@ -249,6 +260,10 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
                "tool_calls": len(inv.steps),
                "calls": [f"{s['tool']}({', '.join(f'{k}={v}' for k, v in s['args'].items())[:70]})" + ("" if s["ok"] else " -> error")
                          for s in inv.steps]}
+        if session is not None:
+            row["checker"] = {"asked where checks fail": session.asked_where, "nodes checked": session.checked,
+                              "tries": session.tries, "verified on try": session.verified_on_try,
+                              "harness refusals": session.refusals}
         if sql is not None:
             scored = fix.apply_and_verify(wh, inv.fix_target, sql, inc["symptom_node"])
             row.update({k: scored[k] for k in ("functional", "integrity", "kept", "still_wrong", "changed_outside_approval")})
@@ -276,6 +291,17 @@ def _summarise_fixes(rows: list[dict]) -> dict:
             t[r["result"]] += 1
             t["functional"] += r["functional"]
             t["integrity"] += r["integrity"]
+            if "checker" in r:
+                c = r["checker"]
+                for k in ("asked where checks fail", "fixed on the first try", "fixed after a failed try", "tries",
+                          "harness refusals", "incidents where the harness refused something"):
+                    t.setdefault(k, 0)
+                t["asked where checks fail"] += c["asked where checks fail"]
+                t["fixed on the first try"] += r["kept"] and c["verified on try"] == 1
+                t["fixed after a failed try"] += r["kept"] and (c["verified on try"] or 0) > 1
+                t["tries"] += c["tries"]
+                t["harness refusals"] += len(c["harness refusals"])
+                t["incidents where the harness refused something"] += bool(c["harness refusals"])
     return out
 
 
@@ -286,6 +312,8 @@ def main() -> None:
                     help="run the LLM investigator on the warehouse (TRIAGE_MODEL / TRIAGE_BASE_URL / TRIAGE_API_KEY)")
     ap.add_argument("--fixer", action="store_true",
                     help="have the model draft SQL for each break and score it by running it (same TRIAGE_* variables)")
+    ap.add_argument("--checker", action="store_true",
+                    help="with --fixer: give the model the checker and the rehearsal as tools it has to use")
     ap.add_argument("--only", nargs="*", help="incident ids, to rerun some without repeating the slow ones")
     ap.add_argument("--rescore", action="store_true", help="recount the saved model run under the current rules")
     a = ap.parse_args()
@@ -294,9 +322,10 @@ def main() -> None:
         return
     if a.fixer:
         from triage.investigator import OpenAICompatChat
-        res = run_fixer(OpenAICompatChat(), a.only, FIX_RESULTS)
-        print(json.dumps(res.get("summary", {}), indent=2))
-        print(f"{res['incidents']} incidents with {res['model']}; see {FIX_RESULTS}")
+        path = CHECKED_FIX_RESULTS if a.checker else FIX_RESULTS
+        res = run_fixer(OpenAICompatChat(), a.only, path, checker=a.checker)
+        print(json.dumps(res.get("summary", {}).get("all", {}), indent=2))
+        print(f"{res['incidents']} incidents with {res['model']}; see {path}")
         return
     if a.investigator:
         from triage.investigator import OpenAICompatChat
