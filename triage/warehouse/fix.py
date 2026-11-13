@@ -49,7 +49,9 @@ INSTRUCTIONS = (
     "If you cannot find the cause, do not guess: say so in plain text and the incident goes to a person."
 )
 
-ANSWER_KEY = re.compile(r"\b(reference\s*\.|clean\s*\.|golden\b|run_log\b|source_log\b|deploys\b|procedures\b)", re.I)
+# Anything that holds the right answer, or says what was changed. Matched as whole words wherever they
+# appear, so quoting a schema name ("reference".x) does not get around it.
+ANSWER_KEY = re.compile(r"\b(reference|clean|golden|run_log|source_log|deploys|good_run|procedures|information_schema|duckdb_\w+)\b", re.I)
 
 
 class Fix(BaseModel):

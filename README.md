@@ -418,7 +418,7 @@ Results are counted per kind and never averaged across kinds. The expectation to
 proposes a fix scores 0 of 9 on the last two kinds.
 
 **A first sample of 12, and why it does not count** (GPT-OSS 120B via OpenRouter, 13 Nov 2026, saved as
-`evals/runs/world_sample12_ids_visible.json`). The task text began "Incident source.cost_in_cents: ...". Every case id
+`evals/runs/world/sample12_ids_visible.json`). The task text began "Incident source.cost_in_cents: ...". Every case id
 names the kind of case, and most name the table. The model read them: it called `upstream` on
 `gen_join_kind.mart_customer_revenue_1` as if that were a node, and for the price in cents, which no check can see, it
 wrote "cost values are loaded in cents" and named `source.cost_in_cents` as the bad table. That is the id read back.

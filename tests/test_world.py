@@ -124,9 +124,13 @@ def test_closing_a_real_sql_fault_as_nothing_wrong_is_scored_as_wrong(wh, all_ca
     assert got == "fixed"
 
 
-def test_a_fix_cannot_read_the_clean_copy_of_a_source(wh):
-    with pytest.raises(ValueError, match="cannot read"):
-        fix.validate(wh, as_dag(), "stg_orders", "select * from clean.orders")
+def test_a_fix_cannot_read_anything_that_holds_the_answer(wh):
+    for sql in ("select * from clean.orders", 'select * from "reference"."rpt_regional_summary"', "select * from main.golden",
+                "select sql from procedures", "select * from deploys", "select * from good_run", "select * from run_log",
+                "select * from source_log", "select * from information_schema.tables", "select * from duckdb_tables()"):
+        with pytest.raises(ValueError, match="cannot read"):
+            fix.validate(wh, as_dag(), "stg_orders", sql)
+    assert fix.validate(wh, as_dag(), "stg_orders", BY_ID["stg_orders"].sql)
 
 
 # ------------------------------------------------------------------ the deploy history
@@ -190,9 +194,26 @@ def test_the_model_is_never_shown_the_case_id_or_the_label(wh, all_cases):
             Listen.said += json.dumps(messages) + json.dumps(tools)
             return {"content": "UNSURE"}
 
+    class Pokes:
+        """Calls every tool that reads, on every node, so that what the tools return is checked too."""
+        model = "pokes"
+
+        def __init__(self, report):
+            from triage.warehouse.pipeline import NODES
+            self.calls = ([("where_checks_fail", {}), ("check_sources", {}), ("pipeline", {})]
+                          + [(tool, {"node": x.id}) for x in NODES for tool in ("status", "upstream", "profile", "check_node")])
+
+        def chat(self, messages, tools):
+            Listen.said += json.dumps(messages[-1])
+            if not self.calls:
+                return {"content": "UNSURE"}
+            name, args = self.calls.pop(0)
+            return {"tool_calls": [{"id": "c", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
     for n, c in enumerate(all_cases[::3], 1):
         seen = world_eval.as_seen(world_eval.stage(wh, c), n)
         Listen.said = ""
+        fix.draft_checked(wh, as_dag(), seen, Pokes(seen["symptom_node"]), open_world=True, max_steps=80)
         fix.draft_checked(wh, as_dag(), seen, Listen(), open_world=True, history=True)
         world_eval.restore(wh)
         assert c["id"] not in Listen.said and c["id"].split(".")[1] not in Listen.said and (c["kind"] == "none" or c["what"] not in Listen.said), c["id"]
