@@ -27,7 +27,11 @@
         "read_sql(int_order_items)",
         "submit_diagnosis(rpt_revenue_dashboard, The trailing_7d_revenue subquery aggr)"
       ],
-      "model": "wrong"
+      "model": "wrong",
+      "evidence": "contradicted",
+      "evidence_why": "checks already fail upstream of rpt_revenue_dashboard, at int_order_items, mart_customer_revenue, mart_daily_revenue, stg_lineitem",
+      "under_the_evidence_check": "a person",
+      "first_failure": "stg_lineitem"
     },
     {
       "id": "type_drift.discount_as_integer",
@@ -51,7 +55,11 @@
         "read_sql(mart_customer_revenue)",
         "submit_diagnosis(mart_daily_revenue, Revenue column type was changed to DECIM)"
       ],
-      "model": "wrong"
+      "model": "wrong",
+      "evidence": "contradicted",
+      "evidence_why": "checks already fail upstream of mart_daily_revenue, at int_order_items, stg_lineitem",
+      "under_the_evidence_check": "a person",
+      "first_failure": "stg_lineitem"
     },
     {
       "id": "dropped_column.order_date_dropped",
@@ -73,7 +81,11 @@
         "upstream(rpt_revenue_dashboard)",
         "submit_diagnosis(stg_orders, int_order_items, The int_order_items procedure s)"
       ],
-      "model": "cause_only"
+      "model": "cause_only",
+      "evidence": "supported",
+      "evidence_why": "checks first fail at stg_orders and at nothing upstream of it",
+      "under_the_evidence_check": "approval gate",
+      "first_failure": "stg_orders"
     },
     {
       "id": "dropped_column.segment_dropped",
@@ -97,7 +109,11 @@
         "read_sql(int_customer_geo)",
         "submit_diagnosis(stg_customer, int_customer_geo, SQL references column 'segme)"
       ],
-      "model": "cause_only"
+      "model": "cause_only",
+      "evidence": "supported",
+      "evidence_why": "checks first fail at stg_customer and at nothing upstream of it",
+      "under_the_evidence_check": "approval gate",
+      "first_failure": "stg_customer"
     },
     {
       "id": "bad_join_key.part_without_supplier",
@@ -119,7 +135,11 @@
         "read_sql(int_part_cost)",
         "submit_diagnosis(int_part_cost, The join to raw.partsupp only matches on part)"
       ],
-      "model": "target"
+      "model": "target",
+      "evidence": "supported",
+      "evidence_why": "checks first fail at int_part_cost and at nothing upstream of it",
+      "under_the_evidence_check": "approval gate",
+      "first_failure": "int_part_cost"
     },
     {
       "id": "bad_join_key.order_without_line",
@@ -141,7 +161,11 @@
         "read_sql(rpt_regional_summary)",
         "submit_diagnosis(rpt_regional_summary, margin_rate is calculated using a glob)"
       ],
-      "model": "wrong"
+      "model": "wrong",
+      "evidence": "unverified",
+      "evidence_why": "every check passes at and upstream of the report",
+      "under_the_evidence_check": "a person",
+      "first_failure": null
     },
     {
       "id": "date_window.latest_day_excluded",
@@ -164,7 +188,11 @@
         "read_sql(mart_daily_revenue)",
         "submit_diagnosis(mart_daily_revenue, The WHERE clause excludes the latest day)"
       ],
-      "model": "target"
+      "model": "target",
+      "evidence": "supported",
+      "evidence_why": "checks first fail at mart_daily_revenue and at nothing upstream of it",
+      "under_the_evidence_check": "approval gate",
+      "first_failure": "mart_daily_revenue"
     },
     {
       "id": "date_window.trailing_six_days",
@@ -189,7 +217,11 @@
         "read_sql(rpt_revenue_dashboard)",
         "submit_diagnosis(rpt_revenue_dashboard, trailing_7d_revenue is computed with )"
       ],
-      "model": "target"
+      "model": "target",
+      "evidence": "unverified",
+      "evidence_why": "every check passes at and upstream of the report",
+      "under_the_evidence_check": "a person",
+      "first_failure": null
     },
     {
       "id": "null_handling.inner_join_nation",
@@ -213,7 +245,11 @@
         "read_sql(int_customer_geo)",
         "submit_diagnosis(int_customer_geo, The join to raw.nation is an inner join, w)"
       ],
-      "model": "target"
+      "model": "target",
+      "evidence": "supported",
+      "evidence_why": "checks first fail at int_customer_geo and at nothing upstream of it",
+      "under_the_evidence_check": "approval gate",
+      "first_failure": "int_customer_geo"
     },
     {
       "id": "null_handling.cost_not_defaulted",
@@ -235,7 +271,11 @@
         "read_sql(rpt_regional_summary)",
         "submit_diagnosis(rpt_regional_summary, margin_rate is calculated using an unc)"
       ],
-      "model": "wrong"
+      "model": "wrong",
+      "evidence": "unverified",
+      "evidence_why": "every check passes at and upstream of the report",
+      "under_the_evidence_check": "a person",
+      "first_failure": null
     },
     {
       "id": "changed_grain.one_row_per_order",
@@ -257,7 +297,11 @@
         "read_sql(int_customer_geo)",
         "submit_diagnosis(int_customer_geo, The LEFT JOIN to stg_orders duplicates cus)"
       ],
-      "model": "target"
+      "model": "target",
+      "evidence": "supported",
+      "evidence_why": "checks first fail at int_customer_geo and at nothing upstream of it",
+      "under_the_evidence_check": "approval gate",
+      "first_failure": "int_customer_geo"
     },
     {
       "id": "changed_grain.one_row_per_month",
@@ -282,7 +326,11 @@
         "read_sql(mart_customer_revenue)",
         "submit_diagnosis(mart_customer_revenue, The GROUP BY includes date_trunc('mon)"
       ],
-      "model": "target"
+      "model": "target",
+      "evidence": "supported",
+      "evidence_why": "checks first fail at mart_customer_revenue and at nothing upstream of it",
+      "under_the_evidence_check": "approval gate",
+      "first_failure": "mart_customer_revenue"
     }
   ],
   "summary": {
@@ -299,7 +347,13 @@
       "model named the edited procedure where the tracer gave no diagnosis": 1,
       "either one named the edited procedure": 3,
       "model named something else and it would reach the approval gate": 0,
-      "model named the edited procedure and it is held back for a person": 1
+      "model named the edited procedure and it is held back for a person": 1,
+      "evidence check: supported": 3,
+      "evidence check: contradicted": 1,
+      "evidence check: unverified": 0,
+      "evidence check: something else reaches the approval gate": 0,
+      "evidence check: edited procedure named and held back for a person": 0,
+      "first-failure rule alone named the edited procedure": 4
     },
     "all": {
       "incidents": 12,
@@ -314,7 +368,13 @@
       "model named the edited procedure where the tracer gave no diagnosis": 3,
       "either one named the edited procedure": 8,
       "model named something else and it would reach the approval gate": 0,
-      "model named the edited procedure and it is held back for a person": 3
+      "model named the edited procedure and it is held back for a person": 3,
+      "evidence check: supported": 7,
+      "evidence check: contradicted": 2,
+      "evidence check: unverified": 3,
+      "evidence check: something else reaches the approval gate": 0,
+      "evidence check: edited procedure named and held back for a person": 1,
+      "first-failure rule alone named the edited procedure": 9
     },
     "held_in": {
       "incidents": 4,
@@ -329,7 +389,13 @@
       "model named the edited procedure where the tracer gave no diagnosis": 1,
       "either one named the edited procedure": 2,
       "model named something else and it would reach the approval gate": 0,
-      "model named the edited procedure and it is held back for a person": 1
+      "model named the edited procedure and it is held back for a person": 1,
+      "evidence check: supported": 1,
+      "evidence check: contradicted": 1,
+      "evidence check: unverified": 2,
+      "evidence check: something else reaches the approval gate": 0,
+      "evidence check: edited procedure named and held back for a person": 1,
+      "first-failure rule alone named the edited procedure": 2
     },
     "ood": {
       "incidents": 4,
@@ -344,7 +410,13 @@
       "model named the edited procedure where the tracer gave no diagnosis": 1,
       "either one named the edited procedure": 3,
       "model named something else and it would reach the approval gate": 0,
-      "model named the edited procedure and it is held back for a person": 1
+      "model named the edited procedure and it is held back for a person": 1,
+      "evidence check: supported": 3,
+      "evidence check: contradicted": 0,
+      "evidence check: unverified": 1,
+      "evidence check: something else reaches the approval gate": 0,
+      "evidence check: edited procedure named and held back for a person": 0,
+      "first-failure rule alone named the edited procedure": 3
     }
   }
 }

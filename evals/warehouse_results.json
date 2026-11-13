@@ -34,6 +34,33 @@
       "wrong": 0
     }
   },
+  "first_failure_rule": "name the node where the health checks first fail, if there is exactly one",
+  "first_failure_by_split": {
+    "evolve": {
+      "incidents": 4,
+      "target": 4,
+      "none": 0,
+      "wrong": 0
+    },
+    "all": {
+      "incidents": 12,
+      "target": 9,
+      "none": 3,
+      "wrong": 0
+    },
+    "held_in": {
+      "incidents": 4,
+      "target": 2,
+      "none": 2,
+      "wrong": 0
+    },
+    "ood": {
+      "incidents": 4,
+      "target": 3,
+      "none": 1,
+      "wrong": 0
+    }
+  },
   "rows": [
     {
       "id": "type_drift.price_as_integer",
@@ -42,7 +69,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": true,
       "probe_sees_it_at_the_source": true,
-      "tracer": "target"
+      "tracer": "target",
+      "first_failure": "target"
     },
     {
       "id": "type_drift.discount_as_integer",
@@ -51,7 +79,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": true,
       "probe_sees_it_at_the_source": true,
-      "tracer": "target"
+      "tracer": "target",
+      "first_failure": "target"
     },
     {
       "id": "dropped_column.order_date_dropped",
@@ -60,7 +89,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": false,
       "probe_sees_it_at_the_source": true,
-      "tracer": "cause_only"
+      "tracer": "cause_only",
+      "first_failure": "target"
     },
     {
       "id": "dropped_column.segment_dropped",
@@ -69,7 +99,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": false,
       "probe_sees_it_at_the_source": true,
-      "tracer": "cause_only"
+      "tracer": "cause_only",
+      "first_failure": "target"
     },
     {
       "id": "bad_join_key.part_without_supplier",
@@ -78,7 +109,8 @@
       "symptom_node": "rpt_regional_summary",
       "silent": true,
       "probe_sees_it_at_the_source": true,
-      "tracer": "none"
+      "tracer": "none",
+      "first_failure": "target"
     },
     {
       "id": "bad_join_key.order_without_line",
@@ -87,7 +119,8 @@
       "symptom_node": "rpt_regional_summary",
       "silent": true,
       "probe_sees_it_at_the_source": false,
-      "tracer": "none"
+      "tracer": "none",
+      "first_failure": "none"
     },
     {
       "id": "date_window.latest_day_excluded",
@@ -96,7 +129,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": true,
       "probe_sees_it_at_the_source": true,
-      "tracer": "target"
+      "tracer": "target",
+      "first_failure": "target"
     },
     {
       "id": "date_window.trailing_six_days",
@@ -105,7 +139,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": true,
       "probe_sees_it_at_the_source": false,
-      "tracer": "none"
+      "tracer": "none",
+      "first_failure": "none"
     },
     {
       "id": "null_handling.inner_join_nation",
@@ -114,7 +149,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": true,
       "probe_sees_it_at_the_source": true,
-      "tracer": "none"
+      "tracer": "none",
+      "first_failure": "target"
     },
     {
       "id": "null_handling.cost_not_defaulted",
@@ -123,7 +159,8 @@
       "symptom_node": "rpt_regional_summary",
       "silent": true,
       "probe_sees_it_at_the_source": false,
-      "tracer": "none"
+      "tracer": "none",
+      "first_failure": "none"
     },
     {
       "id": "changed_grain.one_row_per_order",
@@ -132,7 +169,8 @@
       "symptom_node": "rpt_revenue_dashboard",
       "silent": true,
       "probe_sees_it_at_the_source": true,
-      "tracer": "target"
+      "tracer": "target",
+      "first_failure": "target"
     },
     {
       "id": "changed_grain.one_row_per_month",
@@ -141,7 +179,8 @@
       "symptom_node": "rpt_regional_summary",
       "silent": true,
       "probe_sees_it_at_the_source": true,
-      "tracer": "target"
+      "tracer": "target",
+      "first_failure": "target"
     }
   ]
 }

@@ -27,6 +27,7 @@ import json
 import sys
 from pathlib import Path
 
+from triage import evidence
 from triage.dag import trace
 from triage.warehouse import BREAKS, Warehouse, as_dag, observe
 from triage.warehouse.breaks import split_of
@@ -90,20 +91,28 @@ def run() -> tuple[list[dict], dict]:
     wh.close()
     rows = [{"id": i["id"], "split": i["label"]["split"], "edited": i["label"]["fix_targets"][0],
              "symptom_node": i["symptom_node"], "silent": i["label"]["silent"],
-             "probe_sees_it_at_the_source": i["label"]["probe_sees_it_at_the_source"], "tracer": verdict(i, dag)}
+             "probe_sees_it_at_the_source": i["label"]["probe_sees_it_at_the_source"], "tracer": verdict(i, dag),
+             "first_failure": judge(evidence.origin(dag, i["node_status"], i["symptom_node"]), None,
+                                    i["label"]["fix_targets"][0])}
             for i in incs]
     tally: dict[str, dict[str, int]] = {}
+    by_rule: dict[str, dict[str, int]] = {}
     for r in rows:
         for key in (r["split"], "all"):
             t = tally.setdefault(key, {"incidents": 0, "target": 0, "cause_only": 0, "none": 0, "wrong": 0})
             t["incidents"] += 1
             t[r["tracer"]] = t.get(r["tracer"], 0) + 1
+            ff = by_rule.setdefault(key, {"incidents": 0, "target": 0, "none": 0, "wrong": 0})
+            ff["incidents"] += 1
+            ff[r["first_failure"]] += 1
     manifest = [{"id": i["id"], "symptom_node": i["symptom_node"], "symptom": i["symptom"],
                  "node_status": {n: s["status"] for n, s in i["node_status"].items()}, **i["label"]} for i in incs]
     results = {"scale_factor": 0.01, "incidents": len(rows), "silent": sum(r["silent"] for r in rows),
                "invisible_to_every_probe_check": sum(not r["probe_sees_it_at_the_source"] for r in rows),
                "mode": "rule-based tracer on node health read from the warehouse",
-               "by_split": tally, "rows": rows}
+               "by_split": tally,
+               "first_failure_rule": "name the node where the health checks first fail, if there is exactly one",
+               "first_failure_by_split": by_rule, "rows": rows}
     return manifest, results
 
 
@@ -135,6 +144,7 @@ def run_investigator(model, only: list[str] | None = None, out: Path | None = No
             "reason": inv.reason, "said_instead": inv.answer or None,
             "tracer": verdict(inc, dag), "tracer_target": tr.fix_target,
             "under_todays_cross_check": "approval gate" if agrees else "a person",
+            **_evidence(dag, inc, inv.fix_target if inv.submitted else None, inv.cause),
             "tool_calls": len(inv.steps),
             "calls": [f"{s['tool']}({', '.join(f'{k}={v}' for k, v in s['args'].items())[:70]})" + ("" if s["ok"] else " -> error")
                       for s in inv.steps],
@@ -148,6 +158,13 @@ def run_investigator(model, only: list[str] | None = None, out: Path | None = No
               file=sys.stderr, flush=True)
     wh.close()
     return res
+
+
+def _evidence(dag, inc: dict, target: str | None, cause: str | None) -> dict:
+    ev = evidence.check(dag, inc["node_status"], inc["symptom_node"], target, cause)
+    return {"evidence": ev.verdict, "evidence_why": ev.why,
+            "under_the_evidence_check": "approval gate" if ev.verdict == evidence.SUPPORTED else "a person",
+            "first_failure": evidence.origin(dag, inc["node_status"], inc["symptom_node"])}
 
 
 LABELS = {"target": "named the edited procedure", "cause_only": "named the procedure that errored, edited one as cause",
@@ -165,7 +182,12 @@ def _summarise(rows: list[dict]) -> dict:
                                      "model named the edited procedure where the tracer gave no diagnosis": 0,
                                      "either one named the edited procedure": 0,
                                      "model named something else and it would reach the approval gate": 0,
-                                     "model named the edited procedure and it is held back for a person": 0})
+                                     "model named the edited procedure and it is held back for a person": 0,
+                                     "evidence check: supported": 0, "evidence check: contradicted": 0,
+                                     "evidence check: unverified": 0,
+                                     "evidence check: something else reaches the approval gate": 0,
+                                     "evidence check: edited procedure named and held back for a person": 0,
+                                     "first-failure rule alone named the edited procedure": 0})
             t["incidents"] += 1
             t[f"model {LABELS[r['model']]}"] += 1
             t[f"tracer {LABELS[r['tracer']]}"] += 1
@@ -174,6 +196,11 @@ def _summarise(rows: list[dict]) -> dict:
             t["either one named the edited procedure"] += "target" in (r["model"], r["tracer"])
             t["model named something else and it would reach the approval gate"] += gate and r["model"] == "wrong"
             t["model named the edited procedure and it is held back for a person"] += r["model"] == "target" and not gate
+            ev_gate = r["under_the_evidence_check"] == "approval gate"
+            t[f"evidence check: {r['evidence']}"] += 1
+            t["evidence check: something else reaches the approval gate"] += ev_gate and r["model"] == "wrong"
+            t["evidence check: edited procedure named and held back for a person"] += r["model"] == "target" and not ev_gate
+            t["first-failure rule alone named the edited procedure"] += r["first_failure"] == r["edited"]
     return out
 
 
@@ -181,8 +208,13 @@ def rescore(path: Path) -> dict:
     """Recount a finished model run under the current rules without calling the model again. Only the
     derived fields change: what the model answered and what it called are left as they were recorded."""
     res = json.loads(path.read_text())
+    wh, dag = Warehouse().build(), as_dag()
+    state = {i["id"]: i for i in each_break(wh)}             # node health is rebuilt, the same every time
+    wh.close()
     for r in res["rows"]:
-        r["model"] = judge(r["model_target"] if r["submitted"] else None, r["model_cause"], r["edited"])
+        target = r["model_target"] if r["submitted"] else None
+        r["model"] = judge(target, r["model_cause"], r["edited"])
+        r.update(_evidence(dag, state[r["id"]], target, r["model_cause"]))
     res["summary"] = _summarise(res["rows"])
     path.write_text(json.dumps(res, indent=2) + "\n")
     return res

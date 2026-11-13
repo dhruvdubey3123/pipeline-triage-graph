@@ -236,6 +236,9 @@ def test_scoring_a_model_run_counts_what_todays_cross_check_would_hold_back():
     assert summary["model named the edited procedure where the tracer gave no diagnosis"] == 5
     assert summary["model named the edited procedure and it is held back for a person"] == 7
     assert summary["model named something else and it would reach the approval gate"] == 0
+    # the evidence check lets through the 9 the health checks can see, and not the 3 they cannot
+    assert summary["evidence check: supported"] == 9 and summary["evidence check: unverified"] == 3
+    assert summary["evidence check: edited procedure named and held back for a person"] == 3
 
 
 def test_the_model_and_the_tracer_are_judged_by_the_same_rule():
@@ -249,6 +252,8 @@ def test_the_model_and_the_tracer_are_judged_by_the_same_rule():
 def test_the_saved_model_run_is_counted_under_the_current_rules():
     saved = json.loads(warehouse_eval.LLM_RESULTS.read_text())
     assert saved["summary"] == warehouse_eval._summarise(saved["rows"])
+    for scope in saved["summary"].values():
+        assert scope["evidence check: something else reaches the approval gate"] == 0
     assert all(r["model"] == warehouse_eval.judge(r["model_target"] if r["submitted"] else None, r["model_cause"], r["edited"])
                for r in saved["rows"])
 
@@ -260,3 +265,19 @@ def test_the_probe_answers_the_graphs_data_checks(wh):
         probe = WarehouseProbe(wh)
         assert "share a key (customer_id) that was unique" in probe.check("int_customer_geo", {})
         assert probe.check("stg_orders", {}) is None
+
+
+def test_the_evidence_check_supports_a_right_answer_the_tracer_cannot_confirm(wh):
+    from triage import evidence
+
+    with broken(wh, "bad_join_key.part_without_supplier") as b:
+        st, dag = observe(wh), as_dag()
+        assert trace(dag, st, "rpt_regional_summary").fix_target is None
+        assert evidence.check(dag, st, "rpt_regional_summary", b.node).verdict == "supported"
+        assert evidence.check(dag, st, "rpt_regional_summary", "rpt_regional_summary").verdict == "contradicted"
+
+
+def test_the_first_failure_rule_names_nine_and_never_the_wrong_node():
+    rows = json.loads(warehouse_eval.RESULTS.read_text())["rows"]
+    assert [r["first_failure"] for r in rows].count("target") == 9
+    assert {r["first_failure"] for r in rows} == {"target", "none"}

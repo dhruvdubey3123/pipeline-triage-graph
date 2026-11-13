@@ -250,6 +250,35 @@ reached the approval gate, and the price was half of what the model got right.
 them by one or two. The held-out families (4 incidents) are too few to say anything about on their own. Every row has now
 been read, so a prompt change made from here is only honest if it can be justified from the four `evolve` incidents alone.
 
+**Checking a diagnosis against evidence instead of against the tracer.** `triage/evidence.py` asks one question of any
+diagnosis, whoever produced it: do the health checks first fail at the node it blames, and at nothing upstream of it? The
+answer is `supported`, `contradicted` or `unverified`, with the reason attached, and only `supported` goes to the approval
+gate on its own. The same Groq run, recounted under it (`python -m evals.warehouse_eval --rescore`, no model call):
+
+| The model's 12 diagnoses | Must agree with the tracer | Evidence check |
+|---|---|---|
+| Reached the approval gate | 5 | 7 |
+| Wrong ones that reached it | 0 | 0 |
+| Right ones held back for a person | 3 | 1 |
+
+The two it newly lets through are the join that lost its supplier key and the inner join that dropped customers: the tracer
+could not walk to either, and the checks fail exactly there. Both type-drift answers are `contradicted` with the reason a
+person needs ("checks already fail upstream, at stg_lineitem"). The one right answer still held back is the six-day total,
+which is the answer that was right for the wrong reason, and it is held back because no check fails anywhere.
+
+**The same evidence, with no model at all.** If the rule "name the node where the checks first fail, when there is exactly
+one" is used on its own, it names the edited procedure on **9 of 12** and nothing on the other 3, and is never wrong. That
+is better than the tracer (5) and better than the model (6). On this run the model added nothing the checks could confirm
+that this rule did not already find. The three it misses are the breaks that change values and trip no check, and those are
+the only place a model can add something: it has to read the SQL, and the only way to verify what it says is to run its fix
+and compare the result. That is the next step, and it is why.
+
+**Limits of the check.** `supported` means the first visible damage is at that node, not that the SQL there is wrong: a
+break that passes its own node's checks and only shows further down would get the lower node supported
+(`tests/test_evidence.py` pins this). The rule and the check were written after reading all 12 incidents, so their numbers
+here are in-sample. The triage graph's own reviewer still uses agreement with the tracer; this is measured in the eval and
+not yet wired into the graph.
+
 CI drives the investigator with a scripted model and needs no key.
 
 **What this does not do yet.** The full triage graph and Keel still run on the synthetic incidents: no model drafts SQL, and
