@@ -292,9 +292,27 @@ TRIAGE_BASE_URL=https://api.groq.com/openai/v1 TRIAGE_MODEL=openai/gpt-oss-120b 
   python -m evals.warehouse_eval --fixer             # writes evals/warehouse_fix_results_llm.json after every incident
 ```
 
-No model result for this is reported yet. The verification compares against the reference run, which only means something
-on a frozen copy of the data where the last good output is known: it is a rehearsal before a person approves, not a check
-that can run in production. "Right" means the same rows on this data.
+**One run, GPT-OSS 120B, model alone** (`evals/warehouse_fix_results_llm.json`, with the SQL it wrote for every incident):
+
+| 12 incidents | All | Checks see it (9) | No check sees it (3) |
+|---|---|---|---|
+| Fixed: report and whole warehouse right, one procedure changed | **4** | 2 | **2** |
+| Report came back, warehouse still wrong | 1 | 1 | 0 |
+| Did not fix it | 6 | 5 | 1 |
+| No fix submitted | 1 | 1 | 0 |
+
+- **Two of the three breaks no check can see were fixed and verified.** The tracer and the first-failure rule return nothing
+  on those. This is the part only a model does here.
+- **Seven attempts were not fixes, and all seven were rolled back.** Six of them patched a node downstream of the cause.
+- **Counting two answers apart mattered once.** On the excluded-day break the model widened both ends of the date window:
+  the report came back, the mart underneath gained a day it never had, and the fix was rejected. One score would have
+  counted it.
+- **Where checks can see the break the model alone is poor at finding it**: 2 of 9, on breaks the first-failure rule
+  locates 9 times in 9.
+
+The verification compares against the reference run, which only means something on a frozen copy of the data where the last
+good output is known: it is a rehearsal before a person approves, not a check that can run in production. "Right" means the
+same columns and the same rows on this data.
 
 **The checker in the model's hands, and in the harness.** `--fixer --checker` runs the same task with three more tools:
 `where_checks_fail` (where the health checks first fail, or that they fail nowhere), `check_node` (supported, contradicted
@@ -310,8 +328,31 @@ those is the answer. A model that runs out of tries cannot submit, and the incid
 python -m evals.warehouse_eval --fixer --checker   # writes evals/warehouse_fix_checked_results_llm.json
 ```
 
-No model result for this is reported yet either. Applying a submitted fix for real is still a separate step behind a
-person's approval, and that step is not built here.
+**First run with the checker, and what it showed about the harness** (`evals/warehouse_fix_checked_results_llm.json`).
+This run is not a clean measurement and is kept because of what it exposed:
+
+| 12 incidents | Count |
+|---|---|
+| Fixed and submitted | 4 |
+| Verified in rehearsal, then never submitted | 3 |
+| No verified fix after three tries | 3 |
+| Model unavailable (the provider's daily limit) | 2 |
+
+- **With the checker the model went to the right node on all 7 check-visible incidents it reached**, against 2 of 9 alone,
+  and no unverified fix reached the end, against 7 alone.
+- **The harness refused 7 calls in 6 incidents**, 5 of them a fix proposed for a node the model had not checked. It had been
+  told to check first every time.
+- **Three verified fixes were lost to a rule that asked for too much.** The model rehearsed a fix, the rehearsal passed, and
+  it stopped, once announcing "Fix Submitted" in prose. The closing call added nothing the harness needed, so a verified
+  rehearsal is now taken as the fix.
+- **One correct fix was rejected three times by the verifier.** The model put a dropped column back at the end of the SELECT
+  and the checksum compared columns by position. It now compares them by name, with a test from this case.
+- **On two of the breaks no check can see, the model spent all three tries on the report**, which is the by-design SQL it
+  blamed in the diagnosis run too. On one of them it then found the right procedure with no tries left.
+
+Both harness faults are fixed and a rerun is pending, so no fixed-with-checker rate is claimed. Applying a submitted fix
+for real is a separate step behind a person's approval; that lives in
+[agent-harness-runtime](https://github.com/dhruvdubey3123/agent-harness-runtime).
 
 CI drives the investigator and both fix loops with scripted models and needs no key.
 

@@ -258,19 +258,23 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
                "evidence": evidence.check(dag, inc["node_status"], inc["symptom_node"], inv.fix_target if sql else None).verdict,
                "functional": False, "integrity": False, "kept": False, "still_wrong": None, "changed_outside_approval": None,
                "tool_calls": len(inv.steps),
-               "calls": [f"{s['tool']}({', '.join(f'{k}={v}' for k, v in s['args'].items())[:70]})" + ("" if s["ok"] else " -> error")
-                         for s in inv.steps]}
+               "calls": [f"{s['tool']}({', '.join(f'{k}={v}' for k, v in s['args'].items())[:70]})"
+                         + ("" if s["ok"] else f" -> {s['result'][:110]}") for s in inv.steps]}
         if session is not None:
             row["checker"] = {"asked where checks fail": session.asked_where, "nodes checked": session.checked,
                               "tries": session.tries, "verified on try": session.verified_on_try,
+                              "taken from the rehearsal": session.taken_from_rehearsal,
                               "harness refusals": session.refusals}
         if sql is not None:
             scored = fix.apply_and_verify(wh, inv.fix_target, sql, inc["symptom_node"])
             row.update({k: scored[k] for k in ("functional", "integrity", "kept", "still_wrong", "changed_outside_approval")})
-        row["result"] = ("fixed" if row["kept"] else "no fix submitted" if sql is None
-                         else "report came back, warehouse still wrong" if row["functional"] else "did not fix it")
+        row["result"] = _fix_result(row)
         rows.append(row)
-        res["incidents"], res["summary"] = len(rows), _summarise_fixes(rows)
+        if only and out and out.exists():                       # a partial rerun replaces only the rows it reran
+            order = [b.id for b in BREAKS]
+            kept = [r for r in json.loads(out.read_text())["rows"] if r["id"] not in {x["id"] for x in rows}]
+            res["rows"] = sorted(kept + rows, key=lambda r: order.index(r["id"]))
+        res["incidents"], res["summary"] = len(res["rows"]), _summarise_fixes(res["rows"])
         if out:
             out.write_text(json.dumps(res, indent=2) + "\n")
         print(f"    {row['node'] or 'no fix'}: {row['result']}", file=sys.stderr, flush=True)
@@ -278,7 +282,33 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
     return res
 
 
-FIX_OUTCOMES = ("fixed", "report came back, warehouse still wrong", "did not fix it", "no fix submitted")
+FIX_OUTCOMES = ("fixed", "report came back, warehouse still wrong", "did not fix it", "no fix submitted",
+                "verified in rehearsal, never submitted", "model unavailable")
+
+
+def _fix_result(row: dict) -> str:
+    """`model unavailable` is the provider cutting the run off, not the model failing: those incidents
+    are counted apart and are not evidence about the model. `verified in rehearsal, never submitted`
+    only occurs in runs saved before the harness took a verified fix on the model's behalf."""
+    if row["kept"]:
+        return "fixed"
+    if row["submitted"]:
+        return "report came back, warehouse still wrong" if row["functional"] else "did not fix it"
+    if (row.get("said_instead") or "").startswith("model unavailable"):
+        return "model unavailable"
+    if (row.get("checker") or {}).get("verified on try"):
+        return "verified in rehearsal, never submitted"
+    return "no fix submitted"
+
+
+def rescore_fixes(path: Path) -> dict:
+    """Relabel a saved fix run under the current rules. Nothing the model did is changed."""
+    res = json.loads(path.read_text())
+    for r in res["rows"]:
+        r["result"] = _fix_result(r)
+    res["summary"] = _summarise_fixes(res["rows"])
+    path.write_text(json.dumps(res, indent=2) + "\n")
+    return res
 
 
 def _summarise_fixes(rows: list[dict]) -> dict:
@@ -296,6 +326,8 @@ def _summarise_fixes(rows: list[dict]) -> dict:
                 for k in ("asked where checks fail", "fixed on the first try", "fixed after a failed try", "tries",
                           "harness refusals", "incidents where the harness refused something"):
                     t.setdefault(k, 0)
+                t.setdefault("taken from the rehearsal by the harness", 0)
+                t["taken from the rehearsal by the harness"] += bool(c.get("taken from the rehearsal"))
                 t["asked where checks fail"] += c["asked where checks fail"]
                 t["fixed on the first try"] += r["kept"] and c["verified on try"] == 1
                 t["fixed after a failed try"] += r["kept"] and (c["verified on try"] or 0) > 1
@@ -319,6 +351,9 @@ def main() -> None:
     a = ap.parse_args()
     if a.rescore:
         print(json.dumps(rescore(LLM_RESULTS)["summary"]["all"], indent=2))
+        for path in (FIX_RESULTS, CHECKED_FIX_RESULTS):
+            if path.exists():
+                print(path.name, json.dumps(rescore_fixes(path)["summary"]["all"], indent=2))
         return
     if a.fixer:
         from triage.investigator import OpenAICompatChat

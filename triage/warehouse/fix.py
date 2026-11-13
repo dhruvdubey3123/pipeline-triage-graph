@@ -133,7 +133,8 @@ class Session:
     asked_where: bool = False
     checked: dict = field(default_factory=dict)        # node -> verdict
     tries: int = 0
-    verified: set = field(default_factory=set)         # (node, sql) pairs a rehearsal passed
+    verified: list = field(default_factory=list)       # (node, sql) pairs a rehearsal passed, in order
+    taken_from_rehearsal: bool = False                 # the model stopped without submitting; the harness took the verified fix
     verified_on_try: int | None = None
     refusals: list = field(default_factory=list)       # reasons the harness refused a call
 
@@ -199,9 +200,10 @@ def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Sess
         out = rehearse(wh, fix_target, clean, symptom)
         left = MAX_TRIES - session.tries
         if out["functional"] and out["integrity"]:
-            session.verified.add((fix_target, clean))
+            session.verified.append((fix_target, clean))
             session.verified_on_try = session.verified_on_try or session.tries
-            return "verified: the report and every other table came out right. Submit exactly this fix."
+            return ("verified: the report and every other table came out right. Now call submit_diagnosis with "
+                    "exactly this node and this SQL, and one sentence saying what was wrong.")
         if out["functional"]:
             return (f"not verified: the report came out right, but other tables in the warehouse did not. The cause is "
                     f"not fixed. {left} tries left.")
@@ -236,6 +238,13 @@ def draft_checked(wh: Warehouse, dag: PipelineDAG, incident: dict, model: ChatMo
             "Find the procedure whose SQL is wrong, verify a fix for it, and submit it.")
     inv = investigate(incident, dag, None, model, max_steps=max_steps, specs=checked_tools(wh, dag, incident, session),
                       instructions=CHECKED_INSTRUCTIONS, task_text=task)
-    if not inv.submitted:
-        return inv, None, session
-    return inv, validate(wh, dag, inv.fix_target, inv.steps[-1]["args"]["sql"]), session
+    if inv.submitted:
+        return inv, validate(wh, dag, inv.fix_target, inv.steps[-1]["args"]["sql"]), session
+    if session.verified:
+        # The rehearsal is the gate, and it passed. A model that then stops, or announces the fix in
+        # prose, has still produced a verified fix; the closing call adds nothing the harness needs.
+        inv.fix_target, sql = session.verified[-1]
+        inv.reason = inv.reason or "(the model stopped after the rehearsal verified this fix and gave no reason)"
+        session.taken_from_rehearsal = True
+        return inv, sql, session
+    return inv, None, session

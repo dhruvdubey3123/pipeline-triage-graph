@@ -367,8 +367,9 @@ def test_scoring_a_fix_run_keeps_the_two_answers_apart():
 
     summary = warehouse_eval.run_fixer(Oracle())["summary"]
     assert summary["all"]["fixed"] == 12 and summary["all"]["functional"] == 12 and summary["all"]["integrity"] == 12
-    assert summary["no check sees it"] == {"incidents": 3, "fixed": 3, "report came back, warehouse still wrong": 0,
-                                           "did not fix it": 0, "no fix submitted": 0, "functional": 3, "integrity": 3}
+    unseen = summary["no check sees it"]
+    assert unseen["incidents"] == 3 and unseen["fixed"] == 3 and unseen["functional"] == 3 and unseen["integrity"] == 3
+    assert sum(unseen[k] for k in warehouse_eval.FIX_OUTCOMES) == 3
 
 
 # ---------------------------------------------------------------- the checker in the model's hands, and in the harness
@@ -476,3 +477,46 @@ def test_a_model_that_uses_the_checker_well_fixes_all_twelve_on_the_first_try():
     assert summary["fixed"] == 12 and summary["fixed on the first try"] == 12 and summary["tries"] == 12
     assert summary["harness refusals"] == 0 and summary["asked where checks fail"] == 12
     assert res["summary"]["no check sees it"]["fixed"] == 3
+
+
+def test_a_correct_fix_with_its_columns_in_another_order_is_still_a_fix(wh):
+    """Seen in a model run: the dropped column was put back at the end of the SELECT, every table
+    downstream was right, and the fix was rejected three times because the checksum read columns by position."""
+    from triage.warehouse import fix
+
+    with broken(wh, "dropped_column.order_date_dropped") as b:
+        reordered = ("select o_orderkey as order_id, o_custkey as customer_id, o_orderstatus as status, "
+                     "o_orderdate as order_date from raw.orders")
+        out = fix.rehearse(wh, b.node, reordered, "rpt_revenue_dashboard")
+        assert out["functional"] and out["integrity"]
+        short = "select o_orderkey as order_id, o_custkey as customer_id, o_orderdate as order_date from raw.orders"
+        assert fix.rehearse(wh, b.node, short, "rpt_revenue_dashboard")["integrity"] is False, "a missing column is not"
+
+
+def test_a_model_that_stops_after_a_verified_rehearsal_has_still_produced_the_fix(wh):
+    """Seen in a model run: three incidents had a verified fix and no closing call, one of them with
+    the fix announced in prose. The rehearsal is the gate, so the harness takes the verified fix."""
+    from triage.warehouse import fix
+
+    with broken(wh, "date_window.trailing_six_days") as b:
+        good = wh.sql(b.node).replace("- 6)", "- 7)")
+        inv, sql, session = fix.draft_checked(wh, as_dag(), _incident(wh, b), Scripted(
+            [("check_node", {"node": b.node}), ("try_fix", {"fix_target": b.node, "sql": good})], then="**Fix Submitted**"))
+        assert not inv.submitted and sql == good and inv.fix_target == b.node and session.taken_from_rehearsal
+        out = fix.apply_and_verify(wh, inv.fix_target, sql, "rpt_revenue_dashboard")
+        assert out["kept"]
+
+
+def test_a_model_that_could_not_be_reached_is_not_counted_as_a_model_that_failed():
+    row = {"kept": False, "submitted": False, "functional": False, "said_instead": "model unavailable (HTTPStatusError)"}
+    assert warehouse_eval._fix_result(row) == "model unavailable"
+    assert warehouse_eval._fix_result({**row, "said_instead": "I could not verify a fix."}) == "no fix submitted"
+    assert warehouse_eval._fix_result({**row, "said_instead": None, "checker": {"verified on try": 1}}) \
+        == "verified in rehearsal, never submitted"
+
+
+def test_the_saved_fix_runs_are_labelled_under_the_current_rules():
+    for path in (warehouse_eval.FIX_RESULTS, warehouse_eval.CHECKED_FIX_RESULTS):
+        saved = json.loads(path.read_text())
+        assert saved["summary"] == warehouse_eval._summarise_fixes(saved["rows"])
+        assert all(r["result"] == warehouse_eval._fix_result(r) for r in saved["rows"])

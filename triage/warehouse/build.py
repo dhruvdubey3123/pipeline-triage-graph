@@ -150,11 +150,14 @@ class Warehouse:
                 "latest": str(latest) if latest is not None else None}
 
     def checksum(self, node: str) -> tuple[int, str]:
-        """(rows, a checksum that does not depend on row order). Equal to the reference only if the
-        table holds the same rows."""
+        """(rows, a checksum that depends on neither row order nor column order). Equal to the reference
+        only if the table holds the same columns and the same rows. A fix that returns the right columns
+        in a different order is the same table: everything downstream reads them by name."""
+        cols = sorted(c[0] for c in self.db.execute(f'describe "{node}"').fetchall())
+        packed = ", ".join(f'"{c}"' for c in cols)
         rows, total = self.db.execute(
-            f'select count(*), coalesce(sum(hash(t)::hugeint), 0) from "{node}" t').fetchone()
-        return rows, str(total)
+            f'select count(*), coalesce(sum(hash({packed})::hugeint), 0) from "{node}"').fetchone()
+        return rows, f"{','.join(cols)}:{total}"
 
     def complaint(self, report: str) -> str:
         """What the person looking at the report would say: which numbers are off, not why. They know
