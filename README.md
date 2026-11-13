@@ -407,9 +407,23 @@ python -m evals.world_eval --model --history        # the same, with the deploy 
 python -m evals.warehouse_eval --fixer --checker --history     # the original twelve, with the deploy history
 ```
 
-Results are counted per kind and never averaged across kinds. **No model has been run on these cases yet**; this
-section will carry the counts when one has. The expectation to hold it to: an agent that always proposes a fix scores
-0 of 9 on the last two kinds.
+Results are counted per kind and never averaged across kinds. The expectation to hold them to: an agent that always
+proposes a fix scores 0 of 9 on the last two kinds.
+
+**First look: a sample of 12** (GPT-OSS 120B, `--sample 12 --seed 0`, 13 Nov 2026, one run, without the deploy history).
+
+| Kind | Right | What happened to the rest |
+|---|---|---|
+| `sql` (6) | 5 fixed | 1 handed to a person (a dropped column in `stg_supplier`) |
+| `source` (4) | 3 named the bad source | 1 handed to a person: the price in cents, which no check can see |
+| `none` (2) | 0 | 1 rewrote SQL that was already right; 1 handed to a person |
+
+What this does and does not say. No wrong fix was applied and no real fault was closed as "nothing wrong", in 12 cases.
+The model can tell bad source data from bad SQL when a source check shows it, and gives up, correctly unsure, when none
+does. It did not once say "nothing is wrong" when nothing was. One of those two is a real gap in the harness and not
+only in the model: a rewrite that changes no table passes the rehearsal, because the rehearsal asks whether the
+warehouse is right afterwards, and it was right before. Twelve cases, one run: these are counts, and the full 38 and
+the history arm have not been run.
 
 `world.schedule` deals the same cases out one night at a time, with quiet nights between, for the chat in the harness
 repo.
