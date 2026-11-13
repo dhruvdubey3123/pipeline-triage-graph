@@ -501,8 +501,10 @@ def test_a_model_that_stops_after_a_verified_rehearsal_has_still_produced_the_fi
     with broken(wh, "date_window.trailing_six_days") as b:
         good = wh.sql(b.node).replace("- 6)", "- 7)")
         inv, sql, session = fix.draft_checked(wh, as_dag(), _incident(wh, b), Scripted(
-            [("check_node", {"node": b.node}), ("try_fix", {"fix_target": b.node, "sql": good})], then="**Fix Submitted**"))
+            [("check_node", {"node": b.node}),
+             ("try_fix", {"fix_target": b.node, "sql": good, "reason": "the window was six days"})], then="**Fix Submitted**"))
         assert not inv.submitted and sql == good and inv.fix_target == b.node and session.taken_from_rehearsal
+        assert inv.reason == "the window was six days", "the reason a person will read comes with the rehearsal"
         out = fix.apply_and_verify(wh, inv.fix_target, sql, "rpt_revenue_dashboard")
         assert out["kept"]
 

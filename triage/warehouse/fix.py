@@ -55,6 +55,7 @@ class Fix(BaseModel):
 class Attempt(BaseModel):
     fix_target: str = Field(description="the node whose SQL to replace")
     sql: str = Field(description="the complete replacement SQL for that node: one SELECT statement")
+    reason: str = Field("", description="one sentence: what was wrong and what you changed")
 
 
 def validate(wh: Warehouse, dag: PipelineDAG, node: str, sql: str) -> str:
@@ -119,7 +120,7 @@ CHECKED_INSTRUCTIONS = (
     "and prove the fix works before you submit it. Work in this order. First call where_checks_fail. If it names a "
     "node, start there. If it says nowhere, the health checks cannot see this problem: read the SQL of the nodes "
     "upstream of the report and find it yourself. Call check_node on the node you blame; if it is contradicted, the "
-    "reason tells you where to look instead. Then call try_fix with that node and its complete replacement SELECT. It "
+    "reason tells you where to look instead. Then call try_fix with that node, its complete replacement SELECT and one sentence saying what was wrong. It "
     f"runs your SQL on a rehearsal copy and tells you whether the warehouse came out right. You have {MAX_TRIES} tries. "
     "Change as little as possible and keep every column the procedure already returns. Call submit_diagnosis only "
     "with a fix that try_fix verified. If you run out of tries, do not submit: say so in plain text and the incident "
@@ -134,6 +135,7 @@ class Session:
     checked: dict = field(default_factory=dict)        # node -> verdict
     tries: int = 0
     verified: list = field(default_factory=list)       # (node, sql) pairs a rehearsal passed, in order
+    reasons: dict = field(default_factory=dict)        # (node, sql) -> the reason given with that rehearsal
     taken_from_rehearsal: bool = False                 # the model stopped without submitting; the harness took the verified fix
     verified_on_try: int | None = None
     refusals: list = field(default_factory=list)       # reasons the harness refused a call
@@ -191,7 +193,7 @@ def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Sess
             refuse(f"the checks contradict {node} as the cause, so a fix there is not accepted. Call check_node "
                    "on another node.")
 
-    def try_fix(fix_target: str, sql: str) -> str:
+    def try_fix(fix_target: str, sql: str, reason: str = "") -> str:
         gate(fix_target)
         if session.tries >= MAX_TRIES:
             refuse(f"all {MAX_TRIES} tries are used. Do not submit: say in plain text that you could not verify a fix.")
@@ -201,6 +203,7 @@ def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Sess
         left = MAX_TRIES - session.tries
         if out["functional"] and out["integrity"]:
             session.verified.append((fix_target, clean))
+            session.reasons[(fix_target, clean)] = reason.strip()
             session.verified_on_try = session.verified_on_try or session.tries
             return ("verified: the report and every other table came out right. Now call submit_diagnosis with "
                     "exactly this node and this SQL, and one sentence saying what was wrong.")
@@ -244,7 +247,8 @@ def draft_checked(wh: Warehouse, dag: PipelineDAG, incident: dict, model: ChatMo
         # The rehearsal is the gate, and it passed. A model that then stops, or announces the fix in
         # prose, has still produced a verified fix; the closing call adds nothing the harness needs.
         inv.fix_target, sql = session.verified[-1]
-        inv.reason = inv.reason or "(the model stopped after the rehearsal verified this fix and gave no reason)"
+        inv.reason = (session.reasons.get((inv.fix_target, sql))
+                      or "(the model stopped after the rehearsal verified this fix and gave no reason)")
         session.taken_from_rehearsal = True
         return inv, sql, session
     return inv, None, session
