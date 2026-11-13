@@ -281,3 +281,91 @@ def test_the_first_failure_rule_names_nine_and_never_the_wrong_node():
     rows = json.loads(warehouse_eval.RESULTS.read_text())["rows"]
     assert [r["first_failure"] for r in rows].count("target") == 9
     assert {r["first_failure"] for r in rows} == {"target", "none"}
+
+
+# ---------------------------------------------------------------- drafting a fix and verifying it by running it
+
+def _fix_call(node, sql, reason="fixed"):
+    return ("submit_diagnosis", {"fix_target": node, "sql": sql, "reason": reason})
+
+
+def test_a_correct_fix_for_a_break_no_check_can_see_is_kept(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "date_window.trailing_six_days") as b:
+        inc = _incident(wh, b)
+        assert all(s["status"] == "ok" for s in inc["node_status"].values())
+        repaired = wh.sql(b.node).replace("- 6)", "- 7)")
+        inv, sql = fix.draft(wh, as_dag(), inc, Scripted([("read_sql", {"node": b.node}), _fix_call(b.node, repaired + ";")]))
+        assert inv.submitted and sql == repaired
+        out = fix.apply_and_verify(wh, b.node, sql, inc["symptom_node"])
+        assert out["functional"] and out["integrity"] and out["kept"] and not out["rolled_back"]
+        assert wh.affected() == []
+
+
+def test_a_fix_that_only_brings_the_report_back_is_rolled_back(wh):
+    from triage.warehouse import fix
+
+    right = wh.db.execute("select margin_rate from rpt_regional_summary limit 1").fetchone()[0]
+    with broken(wh, "bad_join_key.part_without_supplier"):
+        before = wh.affected()
+        report = BY_ID["rpt_regional_summary"]
+        shortcut = report.sql.replace("(select sum(margin) / sum(revenue) from mart_supplier_performance)", f"{right!r}::double")
+        out = fix.apply_and_verify(wh, report.id, shortcut, report.id)
+        assert out["functional"] is True and out["integrity"] is False
+        assert out["kept"] is False and out["rolled_back"] is True
+        assert wh.sql(report.id) == report.sql and wh.affected() == before, "left exactly as it was found"
+
+
+def test_sql_that_does_not_run_goes_back_to_the_model_and_nothing_is_deployed(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "date_window.trailing_six_days") as b:
+        deployed = wh.sql(b.node)
+        good = deployed.replace("- 6)", "- 7)")
+        inv, sql = fix.draft(wh, as_dag(), _incident(wh, b), Scripted([
+            _fix_call(b.node, "select no_such_column from mart_customer_revenue"),
+            _fix_call(b.node, good)]))
+        assert [s["ok"] for s in inv.steps] == [False, True] and "does not run" in inv.steps[0]["result"]
+        assert sql == good and wh.sql(b.node) == deployed, "drafting changes nothing"
+
+
+@pytest.mark.parametrize("sql, said", [
+    ("select * from reference.rpt_regional_summary", "cannot read the reference"),
+    ("select node, row_count from golden", "cannot read the reference"),
+    ("drop table stg_orders", "one SELECT"),
+    ("select 1; drop table stg_orders", "one SELECT"),
+])
+def test_a_fix_cannot_read_the_answer_key_or_do_anything_but_select(wh, sql, said):
+    from triage.warehouse import fix
+
+    with pytest.raises(ValueError, match=said):
+        fix.validate(wh, as_dag(), "rpt_regional_summary", sql)
+
+
+def test_no_fix_is_an_outcome_and_not_a_guess(wh):
+    from triage.warehouse import fix
+
+    with broken(wh, "null_handling.cost_not_defaulted") as b:
+        inv, sql = fix.draft(wh, as_dag(), _incident(wh, b), Scripted([("read_sql", {"node": b.node})]))
+        assert sql is None and not inv.submitted and inv.answer == "I cannot find it."
+
+
+def test_scoring_a_fix_run_keeps_the_two_answers_apart():
+    """A model that always submits the reference SQL fixes all twelve, three of them invisible to checks."""
+    reference = {b.id: (b.node, BY_ID[b.node].sql) for b in BREAKS}
+
+    class Oracle:
+        model = "oracle"
+
+        def chat(self, messages, tools):
+            if any(m["role"] == "tool" for m in messages):
+                return {"content": "done"}
+            node, sql = reference[messages[1]["content"].split(":")[0].removeprefix("Incident ")]
+            return {"tool_calls": [{"id": "c", "function": {"name": "submit_diagnosis", "arguments": json.dumps(
+                {"fix_target": node, "sql": sql, "reason": "restored"})}}]}
+
+    summary = warehouse_eval.run_fixer(Oracle())["summary"]
+    assert summary["all"]["fixed"] == 12 and summary["all"]["functional"] == 12 and summary["all"]["integrity"] == 12
+    assert summary["no check sees it"] == {"incidents": 3, "fixed": 3, "report came back, warehouse still wrong": 0,
+                                           "did not fix it": 0, "no fix submitted": 0, "functional": 3, "integrity": 3}

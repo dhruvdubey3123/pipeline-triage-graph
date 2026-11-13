@@ -279,10 +279,27 @@ break that passes its own node's checks and only shows further down would get th
 here are in-sample. The triage graph's own reviewer still uses agreement with the tracer; this is measured in the eval and
 not yet wired into the graph.
 
-CI drives the investigator with a scripted model and needs no key.
+**Drafting the fix and verifying it by running it.** `triage/warehouse/fix.py` is the loop for the breaks no check can
+see. The model reads the warehouse with the same read-only tools and submits one procedure with its complete replacement
+SQL. Before anything runs the SQL has to be a single SELECT, may not read the reference tables or the run log, and has to
+bind; a rejection goes back to the model as an error. Then the prior definition is recorded, the new one is deployed, the
+nightly cycle runs, and the fix is kept only if both answers hold: the report is right again, and so is every other table
+with one procedure changed. Anything else is rolled back, and a test checks the warehouse is left exactly as it was found.
+The model never sees the reference it is scored against.
 
-**What this does not do yet.** The full triage graph and Keel still run on the synthetic incidents: no model drafts SQL, and
-Keel does not apply a patch to the warehouse. Those are the next steps, and none of them is claimed here.
+```bash
+TRIAGE_BASE_URL=https://api.groq.com/openai/v1 TRIAGE_MODEL=openai/gpt-oss-120b TRIAGE_API_KEY=... \
+  python -m evals.warehouse_eval --fixer             # writes evals/warehouse_fix_results_llm.json after every incident
+```
+
+No model result for this is reported yet. The verification compares against the reference run, which only means something
+on a frozen copy of the data where the last good output is known: it is a rehearsal before a person approves, not a check
+that can run in production. "Right" means the same rows on this data.
+
+CI drives the investigator and the fix loop with scripted models and needs no key.
+
+**What this does not do yet.** The full triage graph and Keel still run on the synthetic incidents. The fix loop above
+applies SQL to the warehouse directly; it does not go through Keel's journal or the approval gate yet.
 
 ```bash
 pip install -e ".[dev]"
