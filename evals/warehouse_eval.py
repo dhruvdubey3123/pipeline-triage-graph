@@ -238,6 +238,7 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
 
     wh, dag, rows = Warehouse().build(), as_dag(), []
     res = {"model": getattr(model, "model", "?"),
+           "host": getattr(model, "base_url", "").split("//")[-1].split("/")[0] or "?",   # the same weights behave a little differently per host
            "mode": ("model drafts SQL with the checker as tools it must use; only a rehearsed fix can be submitted"
                     if checker else "model drafts SQL; kept only if the warehouse is right again"),
            "incidents": 0, "rows": rows}

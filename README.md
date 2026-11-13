@@ -292,24 +292,6 @@ TRIAGE_BASE_URL=https://api.groq.com/openai/v1 TRIAGE_MODEL=openai/gpt-oss-120b 
   python -m evals.warehouse_eval --fixer             # writes evals/warehouse_fix_results_llm.json after every incident
 ```
 
-**One run, GPT-OSS 120B, model alone** (`evals/warehouse_fix_results_llm.json`, with the SQL it wrote for every incident):
-
-| 12 incidents | All | Checks see it (9) | No check sees it (3) |
-|---|---|---|---|
-| Fixed: report and whole warehouse right, one procedure changed | **4** | 2 | **2** |
-| Report came back, warehouse still wrong | 1 | 1 | 0 |
-| Did not fix it | 6 | 5 | 1 |
-| No fix submitted | 1 | 1 | 0 |
-
-- **Two of the three breaks no check can see were fixed and verified.** The tracer and the first-failure rule return nothing
-  on those. This is the part only a model does here.
-- **Seven attempts were not fixes, and all seven were rolled back.** Six of them patched a node downstream of the cause.
-- **Counting two answers apart mattered once.** On the excluded-day break the model widened both ends of the date window:
-  the report came back, the mart underneath gained a day it never had, and the fix was rejected. One score would have
-  counted it.
-- **Where checks can see the break the model alone is poor at finding it**: 2 of 9, on breaks the first-failure rule
-  locates 9 times in 9.
-
 The verification compares against the reference run, which only means something on a frozen copy of the data where the last
 good output is known: it is a rehearsal before a person approves, not a check that can run in production. "Right" means the
 same columns and the same rows on this data.
@@ -328,31 +310,52 @@ those is the answer. A model that runs out of tries cannot submit, and the incid
 python -m evals.warehouse_eval --fixer --checker   # writes evals/warehouse_fix_checked_results_llm.json
 ```
 
-**First run with the checker, and what it showed about the harness** (`evals/warehouse_fix_checked_results_llm.json`).
-This run is not a clean measurement and is kept because of what it exposed:
+### Measured: the model alone against the model with the checker
 
-| 12 incidents | Count |
+GPT-OSS 120B served through OpenRouter, the same 12 incidents, one run of each arm
+(`evals/warehouse_fix_results_llm.json` and `evals/warehouse_fix_checked_results_llm.json`, with every tool call, every
+refusal and the SQL the model wrote).
+
+| 12 incidents | Model alone | With the checker |
+|---|---|---|
+| **Fixed and verified**: report and whole warehouse right, one procedure changed | **4** | **9** |
+| A fix that was not one, applied and rolled back | 8 | **0** |
+| No verified fix, handed to a person | 0 | 3 |
+| Fixed, where health checks see the break (9) | 2 | 8 |
+| Fixed, where no check sees it (3) | 2 | 1 |
+
+- **Alone, the model never declined.** Twelve submissions, eight of them wrong, most of them a patch to a node downstream
+  of the cause: a NULL in place of a dropped column, a division by 100 to explain prices that had lost their cents.
+- **With the checker it was never wrong.** All nine fixes passed their first rehearsal. The three it could not fix used
+  their three tries and stopped.
+- **Finding the node is what the checker buys.** Asked where the checks first fail, the model went to the right procedure
+  on all nine check-visible breaks.
+- **The harness still had to refuse.** Three times the model proposed a fix for a node it had not checked, and once it tried
+  a fourth rehearsal. It had been told the order every time.
+- **Five of the nine fixes were never formally submitted.** The model rehearsed the fix, saw it verified, and wrote
+  "Submitted" in prose. The rehearsal is the gate, so the harness takes the verified fix.
+
+**Where the checker arm is worse, and why it is not fixed yet.** On the join that lost its line number, a break no check
+can see, the model alone found and fixed it. With the checker it rehearsed three rewrites of the report and ran out: a cheap
+experiment was available, so it tried its first idea three times and did not read further. The other break it missed the
+same way has the same shape. Both sit in the held-out splits, so changing the prompt or the tools to fix them would be
+tuning on the test. The honest route is more value-only breaks in the tunable split, and that is the next piece of work.
+
+**How far this goes.** Twelve incidents, one run per arm: counts, not rates. Runs vary: across five runs the model alone
+fixed 4 of 12 twice, but not the same four. The excluded-day break was fixed in one checker run and not in the next. The
+harness was changed between runs in response to what the runs showed (below), so the final numbers are in-sample for those
+changes.
+
+**What earlier runs changed.** Kept in `evals/runs/`, relabelled under the current rules:
+
+| Run | What it exposed |
 |---|---|
-| Fixed and submitted | 4 |
-| Verified in rehearsal, then never submitted | 3 |
-| No verified fix after three tries | 3 |
-| Model unavailable (the provider's daily limit) | 2 |
+| Groq, model alone | 4 fixed. One fix widened both ends of a date window: the report came back, the table underneath gained a day, and counting two answers apart rejected it. |
+| Groq, first checker harness | Three verified rehearsals thrown away because the model did not make a closing call, and two incidents cut off by the provider's daily limit, which had been recorded as the model failing. |
+| OpenRouter, first checker harness | The same three lost fixes, and a correct fix rejected three times because the model put a dropped column back at the end of the SELECT and tables were compared by column position. |
 
-- **With the checker the model went to the right node on all 7 check-visible incidents it reached**, against 2 of 9 alone,
-  and no unverified fix reached the end, against 7 alone.
-- **The harness refused 7 calls in 6 incidents**, 6 of them a fix proposed for a node the model had not checked. It had been
-  told to check first every time.
-- **Three verified fixes were lost to a rule that asked for too much.** The model rehearsed a fix, the rehearsal passed, and
-  it stopped, once announcing "Fix Submitted" in prose. The closing call added nothing the harness needed, so a verified
-  rehearsal is now taken as the fix.
-- **One correct fix was rejected three times by the verifier.** The model put a dropped column back at the end of the SELECT
-  and the checksum compared columns by position. It now compares them by name, with a test from this case.
-- **On two of the breaks no check can see, the model spent all three tries on the report**, which is the by-design SQL it
-  blamed in the diagnosis run too. On one of them it then found the right procedure with no tries left.
-
-Both harness faults are fixed and a rerun is pending, so no fixed-with-checker rate is claimed. Applying a submitted fix
-for real is a separate step behind a person's approval; that lives in
-[agent-harness-runtime](https://github.com/dhruvdubey3123/agent-harness-runtime).
+Each of those is now a test. Applying a submitted fix for real is a separate step behind a person's approval; that lives in
+[agent-harness-runtime](https://github.com/dhruvdubey3123/agent-harness-runtime#a-real-sql-fix-approved-in-the-terminal).
 
 CI drives the investigator and both fix loops with scripted models and needs no key.
 

@@ -516,7 +516,20 @@ def test_a_model_that_could_not_be_reached_is_not_counted_as_a_model_that_failed
 
 
 def test_the_saved_fix_runs_are_labelled_under_the_current_rules():
-    for path in (warehouse_eval.FIX_RESULTS, warehouse_eval.CHECKED_FIX_RESULTS):
+    runs = sorted((warehouse_eval.ROOT / "evals/runs").glob("*.json"))
+    assert len(runs) == 3
+    for path in (warehouse_eval.FIX_RESULTS, warehouse_eval.CHECKED_FIX_RESULTS, *runs):
         saved = json.loads(path.read_text())
+        assert saved["host"] in ("openrouter.ai", "api.groq.com")
         assert saved["summary"] == warehouse_eval._summarise_fixes(saved["rows"])
         assert all(r["result"] == warehouse_eval._fix_result(r) for r in saved["rows"])
+
+
+def test_the_reported_comparison_is_one_model_on_one_host():
+    alone = json.loads(warehouse_eval.FIX_RESULTS.read_text())
+    checked = json.loads(warehouse_eval.CHECKED_FIX_RESULTS.read_text())
+    assert (alone["model"], alone["host"]) == (checked["model"], checked["host"])
+    a, c = alone["summary"]["all"], checked["summary"]["all"]
+    assert (a["fixed"], a["did not fix it"]) == (4, 8) and (c["fixed"], c["no fix submitted"]) == (9, 3)
+    assert c["did not fix it"] == 0 and c["report came back, warehouse still wrong"] == 0
+    assert all(r["kept"] == (r["functional"] and r["integrity"]) for r in alone["rows"] + checked["rows"])
