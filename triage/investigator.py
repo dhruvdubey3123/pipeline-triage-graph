@@ -282,6 +282,7 @@ class Investigation:
     plan: list[str] = field(default_factory=list)
     steps: list[dict] = field(default_factory=list)   # every call, its arguments, and what came back
     answer: str = ""
+    closed: dict | None = None                        # ended by a tool other than the terminal one: its arguments
 
 
 def run_tool(spec: ToolSpec, raw_args: Any) -> tuple[bool, str]:
@@ -299,7 +300,7 @@ def run_tool(spec: ToolSpec, raw_args: Any) -> tuple[bool, str]:
 
 def investigate(incident: dict, dag: PipelineDAG, library: CaseLibrary, model: ChatModel,
                 max_steps: int = 14, specs: list[ToolSpec] | None = None, instructions: str = INSTRUCTIONS,
-                task_text: str | None = None) -> Investigation:
+                task_text: str | None = None, also_ends: tuple[str, ...] = ()) -> Investigation:
     """`specs`, `instructions` and `task_text` let the same loop run over a different set of read-only
     tools (triage/warehouse/investigate.py runs it against a real warehouse). The terminal tool keeps
     its name, and the first valid call to it still ends the investigation."""
@@ -334,6 +335,9 @@ def investigate(incident: dict, dag: PipelineDAG, library: CaseLibrary, model: C
         args = raw if isinstance(raw, dict) else _loads(raw)
         out.steps.append({"tool": name, "args": args, "ok": ok, "result": text[:300]})
         messages.append({"role": "tool", "tool_call_id": cid, "content": text})
+        if ok and name in also_ends:                # a way to finish that is not a fix, such as "nothing here to fix"
+            out.closed, out.reason = {"tool": name, **args}, (args.get("reason") or "").strip()
+            break
         if ok and name == TERMINAL:
             out.submitted = True
             out.category, out.fix_target = args.get("category"), args["fix_target"]

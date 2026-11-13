@@ -1,0 +1,335 @@
+[
+ {
+  "id": "gen_column_dropped.stg_orders_1",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "stg_orders",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select o_orderkey as order_id, o_orderdate as order_date, o_orderstatus as status from raw.orders",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_lineitem_1",
+  "kind": "sql",
+  "split": "held_in",
+  "node": "stg_lineitem",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select l_orderkey as order_id, l_partkey as part_id, l_suppkey as supplier_id, l_quantity as quantity, l_extendedprice as extended_price, l_discount as discount from raw.lineitem",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_lineitem_2",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "stg_lineitem",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select l_orderkey as order_id, l_linenumber as line_no, l_suppkey as supplier_id, l_quantity as quantity, l_extendedprice as extended_price, l_discount as discount from raw.lineitem",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_lineitem_3",
+  "kind": "sql",
+  "split": "held_in",
+  "node": "stg_lineitem",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select l_orderkey as order_id, l_linenumber as line_no, l_partkey as part_id, l_quantity as quantity, l_extendedprice as extended_price, l_discount as discount from raw.lineitem",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_lineitem_4",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "stg_lineitem",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select l_orderkey as order_id, l_linenumber as line_no, l_partkey as part_id, l_suppkey as supplier_id, l_extendedprice as extended_price, l_discount as discount from raw.lineitem",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_lineitem_5",
+  "kind": "sql",
+  "split": "held_in",
+  "node": "stg_lineitem",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select l_orderkey as order_id, l_linenumber as line_no, l_partkey as part_id, l_suppkey as supplier_id, l_quantity as quantity, l_discount as discount from raw.lineitem",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_lineitem_6",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "stg_lineitem",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select l_orderkey as order_id, l_linenumber as line_no, l_partkey as part_id, l_suppkey as supplier_id, l_quantity as quantity, l_extendedprice as extended_price from raw.lineitem",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_customer_1",
+  "kind": "sql",
+  "split": "held_in",
+  "node": "stg_customer",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select c_custkey as customer_id, c_mktsegment as segment from raw.customer",
+  "silent": false
+ },
+ {
+  "id": "gen_column_dropped.stg_supplier_1",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "stg_supplier",
+  "what": "a column the staging model stopped selecting",
+  "sql": "select s_suppkey as supplier_id, s_nationkey as nation_id from raw.supplier",
+  "silent": false
+ },
+ {
+  "id": "gen_sign.int_order_items_1",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "int_order_items",
+  "what": "a discount added where it should be taken off",
+  "sql": "select l.order_id, l.line_no, o.customer_id, o.order_date, l.part_id, l.supplier_id, l.quantity, l.extended_price * (1 + l.discount) as net_revenue from stg_lineitem l join stg_orders o on o.order_id = l.order_id",
+  "silent": true
+ },
+ {
+  "id": "gen_join_kind.int_customer_geo_1",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "int_customer_geo",
+  "what": "a left join that became an inner join, so unmatched rows disappear",
+  "sql": "select c.customer_id, c.segment, coalesce(n.n_name, 'UNASSIGNED') as nation, coalesce(r.r_name, 'UNASSIGNED') as region from stg_customer c left join raw.nation n on n.n_nationkey = c.nation_id join raw.region r on r.r_regionkey = n.n_regionkey",
+  "silent": true
+ },
+ {
+  "id": "gen_null_default.int_customer_geo_2",
+  "kind": "sql",
+  "split": "ood",
+  "node": "int_customer_geo",
+  "what": "a default for missing values that was removed",
+  "sql": "select c.customer_id, c.segment, coalesce(n.n_name, 'UNASSIGNED') as nation, r.r_name as region from stg_customer c left join raw.nation n on n.n_nationkey = c.nation_id left join raw.region r on r.r_regionkey = n.n_regionkey",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.mart_daily_revenue_1",
+  "kind": "sql",
+  "split": "ood",
+  "node": "mart_daily_revenue",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select order_date, count(distinct order_id) as orders, avg(net_revenue) as revenue from int_order_items where order_date > (select as_of from meta) - 90 and order_date <= (select as_of from meta) group by order_date",
+  "silent": true
+ },
+ {
+  "id": "gen_join_kind.mart_customer_revenue_1",
+  "kind": "sql",
+  "split": "held_in",
+  "node": "mart_customer_revenue",
+  "what": "a left join that became an inner join, so unmatched rows disappear",
+  "sql": "select g.customer_id, g.region, g.segment, coalesce(sum(i.net_revenue), 0) as revenue, count(distinct i.order_id) as orders from int_customer_geo g join int_order_items i on i.customer_id = g.customer_id group by g.customer_id, g.region, g.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_null_default.mart_customer_revenue_1",
+  "kind": "sql",
+  "split": "ood",
+  "node": "mart_customer_revenue",
+  "what": "a default for missing values that was removed",
+  "sql": "select g.customer_id, g.region, g.segment, sum(i.net_revenue) as revenue, count(distinct i.order_id) as orders from int_customer_geo g left join int_order_items i on i.customer_id = g.customer_id group by g.customer_id, g.region, g.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.mart_customer_revenue_1",
+  "kind": "sql",
+  "split": "ood",
+  "node": "mart_customer_revenue",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select g.customer_id, g.region, g.segment, coalesce(avg(i.net_revenue), 0) as revenue, count(distinct i.order_id) as orders from int_customer_geo g left join int_order_items i on i.customer_id = g.customer_id group by g.customer_id, g.region, g.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.mart_customer_revenue_2",
+  "kind": "sql",
+  "split": "ood",
+  "node": "mart_customer_revenue",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select g.customer_id, g.region, g.segment, coalesce(sum(i.net_revenue), 0) as revenue, count(i.order_id) as orders from int_customer_geo g left join int_order_items i on i.customer_id = g.customer_id group by g.customer_id, g.region, g.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.mart_supplier_performance_1",
+  "kind": "sql",
+  "split": "ood",
+  "node": "mart_supplier_performance",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select s.supplier_id, s.supplier_name, avg(i.net_revenue) as revenue, sum(coalesce(c.supply_cost, 0)) as cost, sum(i.net_revenue - coalesce(c.supply_cost, 0)) as margin from stg_supplier s join int_order_items i on i.supplier_id = s.supplier_id left join int_part_cost c on c.order_id = i.order_id and c.line_no = i.line_no group by s.supplier_id, s.supplier_name",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.mart_supplier_performance_3",
+  "kind": "sql",
+  "split": "ood",
+  "node": "mart_supplier_performance",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select s.supplier_id, s.supplier_name, sum(i.net_revenue) as revenue, sum(coalesce(c.supply_cost, 0)) as cost, avg(i.net_revenue - coalesce(c.supply_cost, 0)) as margin from stg_supplier s join int_order_items i on i.supplier_id = s.supplier_id left join int_part_cost c on c.order_id = i.order_id and c.line_no = i.line_no group by s.supplier_id, s.supplier_name",
+  "silent": true
+ },
+ {
+  "id": "gen_boundary.rpt_revenue_dashboard_1",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "rpt_revenue_dashboard",
+  "what": "a comparison that includes or excludes one value it should not",
+  "sql": "select m.region, m.segment, sum(m.revenue) as revenue, sum(m.orders) as orders, (select max(order_date) from mart_daily_revenue) as latest_day, (select sum(revenue) from mart_daily_revenue where order_date >= (select max(order_date) from mart_daily_revenue) - 7) as trailing_7d_revenue from mart_customer_revenue m group by m.region, m.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_constant.rpt_revenue_dashboard_1",
+  "kind": "sql",
+  "split": "evolve",
+  "node": "rpt_revenue_dashboard",
+  "what": "a window that is one day longer or shorter",
+  "sql": "select m.region, m.segment, sum(m.revenue) as revenue, sum(m.orders) as orders, (select max(order_date) from mart_daily_revenue) as latest_day, (select sum(revenue) from mart_daily_revenue where order_date > (select max(order_date) from mart_daily_revenue) - 8) as trailing_7d_revenue from mart_customer_revenue m group by m.region, m.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_revenue_dashboard_1",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_revenue_dashboard",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, m.segment, avg(m.revenue) as revenue, sum(m.orders) as orders, (select max(order_date) from mart_daily_revenue) as latest_day, (select sum(revenue) from mart_daily_revenue where order_date > (select max(order_date) from mart_daily_revenue) - 7) as trailing_7d_revenue from mart_customer_revenue m group by m.region, m.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_revenue_dashboard_2",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_revenue_dashboard",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, m.segment, sum(m.revenue) as revenue, avg(m.orders) as orders, (select max(order_date) from mart_daily_revenue) as latest_day, (select sum(revenue) from mart_daily_revenue where order_date > (select max(order_date) from mart_daily_revenue) - 7) as trailing_7d_revenue from mart_customer_revenue m group by m.region, m.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_revenue_dashboard_3",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_revenue_dashboard",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, m.segment, sum(m.revenue) as revenue, sum(m.orders) as orders, (select max(order_date) from mart_daily_revenue) as latest_day, (select avg(revenue) from mart_daily_revenue where order_date > (select max(order_date) from mart_daily_revenue) - 7) as trailing_7d_revenue from mart_customer_revenue m group by m.region, m.segment",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_regional_summary_1",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_regional_summary",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, count(*) as customers, avg(m.revenue) as revenue, sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share, (select sum(margin) / sum(revenue) from mart_supplier_performance) as margin_rate from mart_customer_revenue m group by m.region",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_regional_summary_2",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_regional_summary",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, count(*) as customers, sum(m.revenue) as revenue, avg(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share, (select sum(margin) / sum(revenue) from mart_supplier_performance) as margin_rate from mart_customer_revenue m group by m.region",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_regional_summary_3",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_regional_summary",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, count(*) as customers, sum(m.revenue) as revenue, sum(m.revenue) / (select avg(revenue) from mart_customer_revenue) as revenue_share, (select sum(margin) / sum(revenue) from mart_supplier_performance) as margin_rate from mart_customer_revenue m group by m.region",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_regional_summary_4",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_regional_summary",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, count(*) as customers, sum(m.revenue) as revenue, sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share, (select avg(margin) / sum(revenue) from mart_supplier_performance) as margin_rate from mart_customer_revenue m group by m.region",
+  "silent": true
+ },
+ {
+  "id": "gen_aggregate.rpt_regional_summary_5",
+  "kind": "sql",
+  "split": "ood",
+  "node": "rpt_regional_summary",
+  "what": "a total that became an average, or a distinct count that stopped being distinct",
+  "sql": "select m.region, count(*) as customers, sum(m.revenue) as revenue, sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share, (select sum(margin) / avg(revenue) from mart_supplier_performance) as margin_rate from mart_customer_revenue m group by m.region",
+  "silent": true
+ },
+ {
+  "id": "source.orders_loaded_twice",
+  "kind": "source",
+  "split": "held_in",
+  "table": "orders",
+  "what": "one batch of orders was loaded a second time",
+  "source_checks_see_it": true
+ },
+ {
+  "id": "source.lineitems_late",
+  "kind": "source",
+  "split": "held_in",
+  "table": "lineitem",
+  "what": "the last three days of line items have not arrived",
+  "source_checks_see_it": true
+ },
+ {
+  "id": "source.segment_not_filled",
+  "kind": "source",
+  "split": "held_in",
+  "table": "customer",
+  "what": "the source stopped filling the market segment for some customers",
+  "source_checks_see_it": true
+ },
+ {
+  "id": "source.suppliers_missing",
+  "kind": "source",
+  "split": "held_in",
+  "table": "supplier",
+  "what": "a fifth of the suppliers are missing from the extract",
+  "source_checks_see_it": true
+ },
+ {
+  "id": "source.cost_in_cents",
+  "kind": "source",
+  "split": "held_in",
+  "table": "partsupp",
+  "what": "the supplier price started arriving in cents instead of dollars",
+  "source_checks_see_it": false
+ },
+ {
+  "id": "none.mistaken_1",
+  "kind": "none",
+  "split": "held_in",
+  "report": "rpt_revenue_dashboard",
+  "said": "revenue in rpt_revenue_dashboard looks too low this week",
+  "what": "nothing is wrong"
+ },
+ {
+  "id": "none.mistaken_2",
+  "kind": "none",
+  "split": "held_in",
+  "report": "rpt_regional_summary",
+  "said": "margin_rate in rpt_regional_summary looks wrong",
+  "what": "nothing is wrong"
+ },
+ {
+  "id": "none.mistaken_3",
+  "kind": "none",
+  "split": "held_in",
+  "report": "rpt_revenue_dashboard",
+  "said": "trailing_7d_revenue in rpt_revenue_dashboard looks wrong",
+  "what": "nothing is wrong"
+ },
+ {
+  "id": "none.mistaken_4",
+  "kind": "none",
+  "split": "held_in",
+  "report": "rpt_regional_summary",
+  "said": "revenue_share in rpt_regional_summary does not look right",
+  "what": "nothing is wrong"
+ }
+]

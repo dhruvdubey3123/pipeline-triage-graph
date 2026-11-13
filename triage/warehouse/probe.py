@@ -18,7 +18,7 @@ would catch it, and the reference checksum is not available to whoever is doing 
 """
 from __future__ import annotations
 
-from .build import Warehouse
+from .build import RAW, Warehouse
 from .pipeline import NODES
 
 ROW_TOLERANCE = 0.01
@@ -67,6 +67,35 @@ def observe(wh: Warehouse, reference_cycle: int = 1) -> dict[str, dict]:
         problems = _checks(wh, n, now, before)
         status[n.id] = {"status": "deviates", "note": "; ".join(problems)} if problems else {"status": "ok"}
     return status
+
+
+def observe_sources(wh: Warehouse, reference_cycle: int = 1) -> dict[str, list[str]]:
+    """-> {source table: what is not as it was on the last good run}. Only tables with something to say.
+
+    The same kind of check as for a node, on the tables the pipeline reads and does not build. A
+    source only ever gains rows, so losing any is worth saying; a gain has to be more than 1%. Like
+    the node checks, these look at shape and not at values, so a column that arrives in the wrong
+    unit says nothing here."""
+    out: dict[str, list[str]] = {}
+    for t in RAW:
+        now, before = wh.source_run(t), wh.source_run(t, reference_cycle)
+        if not now or not before:
+            continue
+        said = []
+        if now["rows"] < before["rows"]:
+            said.append(f"{now['rows']} rows, {before['rows']} on the last good run")
+        elif before["rows"] and (now["rows"] - before["rows"]) / before["rows"] > ROW_TOLERANCE:
+            said.append(f"{now['rows']} rows, {before['rows']} on the last good run")
+        if now["duplicate_keys"] > before["duplicate_keys"]:
+            said.append(f"{now['duplicate_keys']} rows share a key that was unique")
+        for col, rate in now["nulls"].items():
+            if rate - before["nulls"].get(col, 0.0) > NULL_TOLERANCE:
+                said.append(f"{col} is null in {rate:.1%} of rows, {before['nulls'].get(col, 0.0):.1%} before")
+        if now["latest"] and before["latest"] and now["latest"] < before["latest"]:
+            said.append(f"latest date is {now['latest']}, was {before['latest']}")
+        if said:
+            out[t] = said
+    return out
 
 
 class WarehouseProbe:

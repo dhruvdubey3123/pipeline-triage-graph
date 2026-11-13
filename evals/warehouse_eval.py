@@ -44,6 +44,7 @@ RESULTS = ROOT / "evals/warehouse_results.json"
 LLM_RESULTS = ROOT / "evals/warehouse_results_llm.json"
 FIX_RESULTS = ROOT / "evals/warehouse_fix_results_llm.json"
 CHECKED_FIX_RESULTS = ROOT / "evals/warehouse_fix_checked_results_llm.json"
+HISTORY_FIX_RESULTS = ROOT / "evals/warehouse_fix_history_results_llm.json"
 
 
 def each_break(wh: Warehouse):
@@ -51,6 +52,7 @@ def each_break(wh: Warehouse):
     procedure back and confirm every table is the reference again. The label is kept apart from what
     the triage reads."""
     for b in BREAKS:
+        wh.mark_good()                  # the deploy history a tool may read starts here
         wh.set_sql(b.node, b.broken_sql())
         wh.run_cycle()
         wrong, status = wh.affected(), observe(wh)
@@ -228,7 +230,7 @@ def rescore(path: Path) -> dict:
 
 
 def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max_steps: int | None = None,
-              checker: bool = False) -> dict:
+              checker: bool = False, history: bool = False) -> dict:
     """The model drafts SQL for each break, and the fix is scored by running it.
 
     A fix counts only when the report is right again and so is every other table, with one procedure
@@ -240,6 +242,7 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
     res = {"model": getattr(model, "model", "?"),
            "host": getattr(model, "base_url", "").split("//")[-1].split("/")[0] or "?",   # the same weights behave a little differently per host
            "mode": ("model drafts SQL with the checker as tools it must use; only a rehearsed fix can be submitted"
+                    + ("; it can also read what was deployed since the last good run" if history else "")
                     if checker else "model drafts SQL; kept only if the warehouse is right again"),
            "incidents": 0, "rows": rows}
     for inc in each_break(wh):
@@ -248,7 +251,7 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
         print(f"  {inc['id']} ...", file=sys.stderr, flush=True)
         session = None
         if checker:
-            inv, sql, session = fix.draft_checked(wh, dag, inc, model, max_steps=max_steps or 26)
+            inv, sql, session = fix.draft_checked(wh, dag, inc, model, max_steps=max_steps or 26, history=history)
         else:
             inv, sql = fix.draft(wh, dag, inc, model, max_steps=max_steps or 20)
         edited = inc["label"]["fix_targets"][0]
@@ -347,6 +350,8 @@ def main() -> None:
                     help="have the model draft SQL for each break and score it by running it (same TRIAGE_* variables)")
     ap.add_argument("--checker", action="store_true",
                     help="with --fixer: give the model the checker and the rehearsal as tools it has to use")
+    ap.add_argument("--history", action="store_true",
+                    help="with --fixer --checker: also give the model the deploy history. Saved apart, as its own arm")
     ap.add_argument("--only", nargs="*", help="incident ids, to rerun some without repeating the slow ones")
     ap.add_argument("--rescore", action="store_true", help="recount the saved model run under the current rules")
     a = ap.parse_args()
@@ -358,8 +363,10 @@ def main() -> None:
         return
     if a.fixer:
         from triage.investigator import OpenAICompatChat
-        path = CHECKED_FIX_RESULTS if a.checker else FIX_RESULTS
-        res = run_fixer(OpenAICompatChat(), a.only, path, checker=a.checker)
+        if a.history and not a.checker:
+            sys.exit("--history is an arm of the checker run: use --fixer --checker --history")
+        path = HISTORY_FIX_RESULTS if a.history else CHECKED_FIX_RESULTS if a.checker else FIX_RESULTS
+        res = run_fixer(OpenAICompatChat(), a.only, path, checker=a.checker, history=a.history)
         print(json.dumps(res.get("summary", {}).get("all", {}), indent=2))
         print(f"{res['incidents']} incidents with {res['model']}; see {path}")
         return

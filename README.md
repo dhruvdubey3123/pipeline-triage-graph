@@ -368,6 +368,52 @@ python -m evals.warehouse_eval            # rebuild, break, trace, write evals/w
 pytest -q tests/test_warehouse.py
 ```
 
+## When the answer is not a SQL fix
+
+The twelve breaks above all have one shape: a procedure is wrong, find it, fix it. An agent can do well on that by
+always proposing a fix. Real on-call work is not like that, so there is a second set of cases
+(`triage/warehouse/world.py`, 38 of them) where three different things can be true:
+
+| Kind | Cases | What happened | The right answer |
+|---|---|---|---|
+| `sql` | 29 | one generated edit to one procedure | a fix that verifies |
+| `source` | 5 | every procedure is correct; a source table arrived bad | no SQL change, and the name of the table |
+| `none` | 4 | nothing is wrong; the person is mistaken | say so, change nothing |
+
+**Generated faults** (`mutants.py`). Rules make one small edit of a kind people really merge, at every place it applies
+in every procedure: a boundary moved by one, a left join turned inner, a join condition or a default dropped, a sum
+turned into an average. A mutant is kept only if it changes a report. 40 candidates, 29 real incidents, 19 of them
+silent. Two kinds are held out whole. They are few and uneven (13 are aggregate swaps), which the counts will show.
+
+**Bad source data** (`sourcefaults.py`). A batch loaded twice, three days of line items not arrived, a column the
+source stopped filling, a fifth of the suppliers missing, a price arriving in cents. The model gets `check_sources`,
+the same shape checks as for a node, on the tables the pipeline reads. Four of the five show there. The price in cents
+does not: same rows, keys, nulls and dates.
+
+**A way to end without a fix.** `close_without_fix` takes `source_data` and a table, or `nothing_wrong`. The harness
+refuses it until the model has read both sets of checks. A fix that dedupes a double-loaded table in SQL does verify,
+and it is counted as `worked around bad data in SQL`, not as right: it hides the problem from the source's owner.
+
+**The deploy history, as its own arm.** `recent_changes` shows what was deployed since the last good run, as a diff.
+It was withheld until now because it makes a SQL fault close to trivial. A real agent would have it, so it is offered
+with `--history` and saved to a separate file. Where it cannot help is the point: with bad data or a mistaken complaint
+the history is empty.
+
+```
+python -m evals.world_eval                          # write the case list, no model
+python -m evals.world_eval --model --sample 12      # a spread of cases, cheap
+python -m evals.world_eval --model                  # all 38
+python -m evals.world_eval --model --history        # the same, with the deploy history
+python -m evals.warehouse_eval --fixer --checker --history     # the original twelve, with the deploy history
+```
+
+Results are counted per kind and never averaged across kinds. **No model has been run on these cases yet**; this
+section will carry the counts when one has. The expectation to hold it to: an agent that always proposes a fix scores
+0 of 9 on the last two kinds.
+
+`world.schedule` deals the same cases out one night at a time, with quiet nights between, for the chat in the harness
+repo.
+
 ## Running inside the agent harness
 
 Triage stops at the human gate. What happens after approval, actually applying the fix, now runs inside
