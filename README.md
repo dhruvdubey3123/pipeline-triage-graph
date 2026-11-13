@@ -221,7 +221,36 @@ TRIAGE_BASE_URL=https://api.groq.com/openai/v1 TRIAGE_MODEL=openai/gpt-oss-120b 
   python -m evals.warehouse_eval --investigator      # writes evals/warehouse_results_llm.json after every incident
 ```
 
-No model result is reported here yet. CI drives the investigator with a scripted model and needs no key.
+**One run, GPT-OSS 120B through Groq's free tier** (`evals/warehouse_results_llm.json`, every tool call and reason included).
+The model and the tracer are counted by the same rule.
+
+| 12 incidents | Model | Tracer (rules) |
+|---|---|---|
+| Named the procedure that was edited | **6** | 5 |
+| Named the procedure that errored, with the edited one as its cause | 2 | 2 |
+| Named something else | **4** | 0 |
+| Gave no diagnosis | **0** | 5 |
+
+At least one of the two named the edited procedure on 8 of the 12. They miss in different places:
+
+- **The model found 3 the tracer cannot see**: the join that lost its supplier key, the customers dropped by an inner join, and
+  the seven-day total that sums six days and passes every health check. It got there by reading the SQL.
+- **The model lost 2 the tracer gets.** On both type-drift breaks every node from staging to the report was flagged, and the
+  model stopped partway down the chain without looking upstream. The tracer walked to the top.
+- **It never said it could not find the cause.** It was told to, and it was wrong 4 times with a confident reason each time.
+- **One of its 6 is the right node for the wrong reason.** Both reports repeat one overall figure on every row, by design. The
+  model called that a bug in 4 incidents; in one of them the report happened to be the procedure that was edited. Read by
+  hand, 5 of 12 are right for the right reason.
+
+What the cross-check did with it, as it stands today: all 4 wrong answers went to a person, because the tracer did not agree
+with any of them, and so did 3 of the 6 right ones, because the tracer had nothing to confirm them with. Nothing wrong
+reached the approval gate, and the price was half of what the model got right.
+
+**How far this goes.** Twelve incidents and a single run: these are counts, not rates, and a second run could move any of
+them by one or two. The held-out families (4 incidents) are too few to say anything about on their own. Every row has now
+been read, so a prompt change made from here is only honest if it can be justified from the four `evolve` incidents alone.
+
+CI drives the investigator with a scripted model and needs no key.
 
 **What this does not do yet.** The full triage graph and Keel still run on the synthetic incidents: no model drafts SQL, and
 Keel does not apply a patch to the warehouse. Those are the next steps, and none of them is claimed here.

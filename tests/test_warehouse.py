@@ -232,10 +232,25 @@ def test_scoring_a_model_run_counts_what_todays_cross_check_would_hold_back():
                 {"fix_target": answers[inc], "reason": "read the SQL"})}}]}
 
     summary = warehouse_eval.run_investigator(Oracle())["summary"]["all"]
-    assert summary["model right"] == 12 and summary["tracer named the edited procedure"] == 5
-    assert summary["model right where the tracer found nothing"] == 5
-    assert summary["right diagnoses held back because the tracer could not confirm them"] == 7
-    assert summary["wrong diagnoses that would reach the approval gate"] == 0
+    assert summary["model named the edited procedure"] == 12 and summary["tracer named the edited procedure"] == 5
+    assert summary["model named the edited procedure where the tracer gave no diagnosis"] == 5
+    assert summary["model named the edited procedure and it is held back for a person"] == 7
+    assert summary["model named something else and it would reach the approval gate"] == 0
+
+
+def test_the_model_and_the_tracer_are_judged_by_the_same_rule():
+    judge = warehouse_eval.judge
+    assert judge("stg_orders", None, "stg_orders") == "target"
+    assert judge("int_order_items", "stg_orders", "stg_orders") == "cause_only"
+    assert judge("int_order_items", None, "stg_orders") == "wrong"
+    assert judge(None, None, "stg_orders") == "none"
+
+
+def test_the_saved_model_run_is_counted_under_the_current_rules():
+    saved = json.loads(warehouse_eval.LLM_RESULTS.read_text())
+    assert saved["summary"] == warehouse_eval._summarise(saved["rows"])
+    assert all(r["model"] == warehouse_eval.judge(r["model_target"] if r["submitted"] else None, r["model_cause"], r["edited"])
+               for r in saved["rows"])
 
 
 def test_the_probe_answers_the_graphs_data_checks(wh):

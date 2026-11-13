@@ -67,15 +67,20 @@ def incidents(wh: Warehouse) -> list[dict]:
     return list(each_break(wh))
 
 
+def judge(target: str | None, cause: str | None, edited: str) -> str:
+    """One rule for the tracer and the model alike: target, cause_only, none or wrong."""
+    if target is None:
+        return "none"
+    if target == edited:
+        return "target"
+    return "cause_only" if cause == edited else "wrong"
+
+
 def verdict(inc: dict, dag) -> str:
     if inc["symptom_node"] is None:
         return "no_symptom"
-    res, edited = trace(dag, inc["node_status"], inc["symptom_node"]), inc["label"]["fix_targets"][0]
-    if res.fix_target == edited:
-        return "target"
-    if res.upstream_cause == edited:
-        return "cause_only"
-    return "none" if res.fix_target is None else "wrong"
+    res = trace(dag, inc["node_status"], inc["symptom_node"])
+    return judge(res.fix_target, res.upstream_cause, inc["label"]["fix_targets"][0])
 
 
 def run() -> tuple[list[dict], dict]:
@@ -126,43 +131,61 @@ def run_investigator(model, only: list[str] | None = None, out: Path | None = No
         rows.append({
             "id": inc["id"], "split": inc["label"]["split"], "edited": edited, "symptom": inc["symptom"],
             "submitted": inv.submitted, "model_target": inv.fix_target, "model_cause": inv.cause or None,
-            "model_right": right, "reason": inv.reason, "said_instead": inv.answer or None,
+            "model_right": right, "model": judge(inv.fix_target if inv.submitted else None, inv.cause, edited),
+            "reason": inv.reason, "said_instead": inv.answer or None,
             "tracer": verdict(inc, dag), "tracer_target": tr.fix_target,
             "under_todays_cross_check": "approval gate" if agrees else "a person",
             "tool_calls": len(inv.steps),
-            "calls": [f"{s['tool']}({', '.join(str(v) for v in s['args'].values())[:60]})" + ("" if s["ok"] else " -> error")
+            "calls": [f"{s['tool']}({', '.join(f'{k}={v}' for k, v in s['args'].items())[:70]})" + ("" if s["ok"] else " -> error")
                       for s in inv.steps],
         })
         res["incidents"] = len(rows)
         res["summary"] = _summarise(rows)
         if out:
             out.write_text(json.dumps(res, indent=2) + "\n")       # after every incident: a rate limit loses one, not all
-        print(f"    model: {inv.fix_target if inv.submitted else 'no diagnosis'} "
-              f"({'right' if right else 'wrong' if inv.submitted else 'abstained'}), tracer: {rows[-1]['tracer']}",
+        print(f"    model: {inv.fix_target if inv.submitted else 'no diagnosis'} ({rows[-1]['model']}), "
+              f"tracer: {rows[-1]['tracer']}",
               file=sys.stderr, flush=True)
     wh.close()
     return res
 
 
+LABELS = {"target": "named the edited procedure", "cause_only": "named the procedure that errored, edited one as cause",
+          "none": "gave no diagnosis", "wrong": "named something else"}
+
+
 def _summarise(rows: list[dict]) -> dict:
+    """The model and the tracer are counted by the same four outcomes. A diagnosis is 'sound' when it
+    points at the edited procedure, as the target or as the stated cause of the one that errored."""
     out: dict[str, dict] = {}
     for r in rows:
         for key in (r["split"], "all"):
-            t = out.setdefault(key, {"incidents": 0, "model right": 0, "model wrong": 0, "model gave no diagnosis": 0,
-                                     "tracer named the edited procedure": 0,
-                                     "model right where the tracer found nothing": 0,
-                                     "wrong diagnoses that would reach the approval gate": 0,
-                                     "right diagnoses held back because the tracer could not confirm them": 0})
+            t = out.setdefault(key, {"incidents": 0, **{f"model {v}": 0 for v in LABELS.values()},
+                                     **{f"tracer {v}": 0 for v in LABELS.values()},
+                                     "model named the edited procedure where the tracer gave no diagnosis": 0,
+                                     "either one named the edited procedure": 0,
+                                     "model named something else and it would reach the approval gate": 0,
+                                     "model named the edited procedure and it is held back for a person": 0})
             t["incidents"] += 1
-            t["model right"] += r["model_right"]
-            t["model wrong"] += r["submitted"] and not r["model_right"]
-            t["model gave no diagnosis"] += not r["submitted"]
-            t["tracer named the edited procedure"] += r["tracer"] == "target"
-            t["model right where the tracer found nothing"] += r["model_right"] and r["tracer"] == "none"
+            t[f"model {LABELS[r['model']]}"] += 1
+            t[f"tracer {LABELS[r['tracer']]}"] += 1
             gate = r["under_todays_cross_check"] == "approval gate"
-            t["wrong diagnoses that would reach the approval gate"] += gate and not r["model_right"]
-            t["right diagnoses held back because the tracer could not confirm them"] += r["model_right"] and not gate
+            t["model named the edited procedure where the tracer gave no diagnosis"] += r["model"] == "target" and r["tracer"] == "none"
+            t["either one named the edited procedure"] += "target" in (r["model"], r["tracer"])
+            t["model named something else and it would reach the approval gate"] += gate and r["model"] == "wrong"
+            t["model named the edited procedure and it is held back for a person"] += r["model"] == "target" and not gate
     return out
+
+
+def rescore(path: Path) -> dict:
+    """Recount a finished model run under the current rules without calling the model again. Only the
+    derived fields change: what the model answered and what it called are left as they were recorded."""
+    res = json.loads(path.read_text())
+    for r in res["rows"]:
+        r["model"] = judge(r["model_target"] if r["submitted"] else None, r["model_cause"], r["edited"])
+    res["summary"] = _summarise(res["rows"])
+    path.write_text(json.dumps(res, indent=2) + "\n")
+    return res
 
 
 def main() -> None:
@@ -171,7 +194,11 @@ def main() -> None:
     ap.add_argument("--investigator", action="store_true",
                     help="run the LLM investigator on the warehouse (TRIAGE_MODEL / TRIAGE_BASE_URL / TRIAGE_API_KEY)")
     ap.add_argument("--only", nargs="*", help="incident ids, to rerun some without repeating the slow ones")
+    ap.add_argument("--rescore", action="store_true", help="recount the saved model run under the current rules")
     a = ap.parse_args()
+    if a.rescore:
+        print(json.dumps(rescore(LLM_RESULTS)["summary"]["all"], indent=2))
+        return
     if a.investigator:
         from triage.investigator import OpenAICompatChat
         res = run_investigator(OpenAICompatChat(), a.only, LLM_RESULTS)
