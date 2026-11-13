@@ -312,6 +312,13 @@ python -m evals.warehouse_eval --fixer --checker   # writes evals/warehouse_fix_
 
 ### Measured: the model alone against the model with the checker
 
+> **Read these counts with this in mind.** In every model run in this section, and in the diagnosis-only run above, the
+> task text included the break's id, for example `date_window.trailing_six_days`. The ids say what kind of fault it is
+> and never which table. Both arms saw the same ids, so the difference between them is like for like, but the counts
+> themselves are likely too high, most of all on the breaks no health check sees. Found on 13 Nov 2026 and fixed: the
+> model is now shown only a number. These runs have not been repeated since. Results files from before the fix have no
+> `ids_hidden_from_model` field.
+
 GPT-OSS 120B served through OpenRouter, the same 12 incidents, one run of each arm
 (`evals/warehouse_fix_results_llm.json` and `evals/warehouse_fix_checked_results_llm.json`, with every tool call, every
 refusal and the SQL the model wrote).
@@ -410,20 +417,30 @@ python -m evals.warehouse_eval --fixer --checker --history     # the original tw
 Results are counted per kind and never averaged across kinds. The expectation to hold them to: an agent that always
 proposes a fix scores 0 of 9 on the last two kinds.
 
-**First look: a sample of 12** (GPT-OSS 120B, `--sample 12 --seed 0`, 13 Nov 2026, one run, without the deploy history).
+**A first sample of 12, and why it does not count** (GPT-OSS 120B via OpenRouter, 13 Nov 2026, saved as
+`evals/runs/world_sample12_ids_visible.json`). The task text began "Incident source.cost_in_cents: ...". Every case id
+names the kind of case, and most name the table. The model read them: it called `upstream` on
+`gen_join_kind.mart_customer_revenue_1` as if that were a node, and for the price in cents, which no check can see, it
+wrote "cost values are loaded in cents" and named `source.cost_in_cents` as the bad table. That is the id read back.
+The counts from that run (5 of 6, 3 of 4, 0 of 2) are therefore not a measurement and are not used.
 
-| Kind | Right | What happened to the rest |
-|---|---|---|
-| `sql` (6) | 5 fixed | 1 handed to a person (a dropped column in `stg_supplier`) |
-| `source` (4) | 3 named the bad source | 1 handed to a person: the price in cents, which no check can see |
-| `none` (2) | 0 | 1 rewrote SQL that was already right; 1 handed to a person |
+The same was true of every model run on the twelve hand-written breaks above: their ids
+(`date_window.trailing_six_days`, `null_handling.cost_not_defaulted`) say what the fault is, though not where. See the
+note on that table.
 
-What this does and does not say. No wrong fix was applied and no real fault was closed as "nothing wrong", in 12 cases.
-The model can tell bad source data from bad SQL when a source check shows it, and gives up, correctly unsure, when none
-does. It did not once say "nothing is wrong" when nothing was. One of those two is a real gap in the harness and not
-only in the model: a rewrite that changes no table passes the rehearsal, because the rehearsal asks whether the
-warehouse is right afterwards, and it was right before. Twelve cases, one run: these are counts, and the full 38 and
-the history arm have not been run.
+The model is now shown a number (`INC-003`) and nothing else that identifies the case, and a test checks that no id,
+kind or label reaches it (`tests/test_world.py`). What the run still showed, because it does not depend on the ids:
+
+- **A rewrite that changes nothing passed as a fix.** On a mistaken complaint the model replaced a correct formula with
+  a different one that gives the same numbers on this data. The rehearsal passed it, because the warehouse was right
+  before. Now a rehearsal whose SQL builds exactly the tables the deployed SQL builds is refused as "not a fix". This
+  needs no knowledge of the right answer.
+- **The model took a staging table for a source**, twice. The instructions now say which tables are sources.
+- **Three of twelve ended with the tool call written out as JSON in prose.** Text ends nothing, so the loop now says so
+  once and gives the model one more turn.
+
+These three changes were made after seeing this run, so the next numbers are in-sample for them. **No valid model run
+exists on these cases yet.**
 
 `world.schedule` deals the same cases out one night at a time, with quiet nights between, for the chat in the harness
 repo.

@@ -28,7 +28,7 @@ from pathlib import Path
 from triage.warehouse import as_dag
 from triage.warehouse.build import Warehouse
 from triage.warehouse.probe import observe_sources
-from triage.warehouse.world import RIGHT, cases, restore, result, stage
+from triage.warehouse.world import RIGHT, as_seen, cases, restore, result, stage
 
 ROOT = Path(__file__).resolve().parent.parent
 CASES = ROOT / "evals/data/world_cases.json"
@@ -53,9 +53,9 @@ def run_model(model, out: Path, history: bool = False, only: list[str] | None = 
     res = {"model": getattr(model, "model", "?"), "host": getattr(model, "base_url", "").split("//")[-1].split("/")[0] or "?",
            "mode": "open world: a fix, a bad source, or nothing wrong" + ("; with the deploy history as a tool" if history else ""),
            "sample": sample, "seed": seed if sample else None, "rows": []}
-    for c in todo:
+    for n, c in enumerate(todo, 1):
         print(f"  {c['id']} ...", file=sys.stderr, flush=True)
-        inc = stage(wh, c)
+        inc = as_seen(stage(wh, c), n)      # the model never sees the case id
         inv, sql, session = fix.draft_checked(wh, dag, inc, model, max_steps=max_steps, history=history, open_world=True)
         kept = False
         if sql is not None:
@@ -66,7 +66,8 @@ def run_model(model, out: Path, history: bool = False, only: list[str] | None = 
             "checks_fail_somewhere": any(s["status"] != "ok" for s in inc["node_status"].values()),
             "source_checks_fail": sorted(observe_sources(wh)), "result": got, "right": got == RIGHT[c["kind"]],
             "node": inv.fix_target if sql else None, "sql": sql, "closed": session.closed, "reason": inv.reason,
-            "said_instead": inv.answer or None, "tries": session.tries, "harness_refusals": session.refusals,
+            "said_instead": inv.answer or None, "tries": session.tries, "rehearsals_that_changed_nothing": session.no_ops,
+            "told_to_use_a_tool": inv.nudged, "harness_refusals": session.refusals,
             "read_the_history": session.asked_changes if history else None, "tool_calls": len(inv.steps),
             "calls": [f"{s['tool']}({', '.join(f'{k}={v}' for k, v in s['args'].items())[:70]})"
                       + ("" if s["ok"] else f" -> {s['result'][:110]}") for s in inv.steps]})

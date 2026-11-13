@@ -138,6 +138,12 @@ def test_the_committed_manifest_and_results_are_what_the_code_produces():
 
 # ---------------------------------------------------------------- the investigator on the warehouse
 
+def _which(messages) -> str:
+    """The test doubles below know the answers, so they need to know which break they are on. The model
+    is only ever shown a number (INC-003), so they count: the evals run the breaks in order."""
+    return BREAKS[int(messages[1]["content"].split(":")[0].removeprefix("Incident INC-")) - 1].id
+
+
 class Scripted:
     """A chat model that makes the calls it is given, in order, then answers in plain text."""
     model = "scripted"
@@ -227,7 +233,7 @@ def test_scoring_a_model_run_counts_what_todays_cross_check_would_hold_back():
         def chat(self, messages, tools):
             if any(m["role"] == "tool" for m in messages):
                 return {"content": "done"}
-            inc = messages[1]["content"].split(":")[0].removeprefix("Incident ")
+            inc = _which(messages)
             return {"tool_calls": [{"id": "c", "function": {"name": "submit_diagnosis", "arguments": json.dumps(
                 {"fix_target": answers[inc], "reason": "read the SQL"})}}]}
 
@@ -361,7 +367,7 @@ def test_scoring_a_fix_run_keeps_the_two_answers_apart():
         def chat(self, messages, tools):
             if any(m["role"] == "tool" for m in messages):
                 return {"content": "done"}
-            node, sql = reference[messages[1]["content"].split(":")[0].removeprefix("Incident ")]
+            node, sql = reference[_which(messages)]
             return {"tool_calls": [{"id": "c", "function": {"name": "submit_diagnosis", "arguments": json.dumps(
                 {"fix_target": node, "sql": sql, "reason": "restored"})}}]}
 
@@ -464,7 +470,7 @@ def test_a_model_that_uses_the_checker_well_fixes_all_twelve_on_the_first_try():
         model = "careful"
 
         def chat(self, messages, tools):
-            node, sql = reference[messages[1]["content"].split(":")[0].removeprefix("Incident ")]
+            node, sql = reference[_which(messages)]
             done = sum(m["role"] == "tool" for m in messages)
             plan = [("where_checks_fail", {}), ("check_node", {"node": node}), ("try_fix", {"fix_target": node, "sql": sql}),
                     ("submit_diagnosis", {"fix_target": node, "sql": sql, "reason": "restored"})]

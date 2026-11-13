@@ -38,6 +38,7 @@ from triage.warehouse import BREAKS, Warehouse, as_dag, observe
 from triage.warehouse.breaks import split_of
 from triage.warehouse.pipeline import BY_ID, REPORTS
 
+from triage.warehouse.world import as_seen
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "evals/data/warehouse_incidents.json"
 RESULTS = ROOT / "evals/warehouse_results.json"
@@ -137,12 +138,12 @@ def run_investigator(model, only: list[str] | None = None, out: Path | None = No
 
     wh, dag, rows = Warehouse().build(), as_dag(), []
     res = {"model": getattr(model, "model", "?"), "mode": "LLM investigator with read-only warehouse tools, next to the tracer",
-           "incidents": 0, "rows": rows}
+           "ids_hidden_from_model": True, "incidents": 0, "rows": rows}
     for inc in each_break(wh):
         if (only and inc["id"] not in only) or inc["symptom_node"] is None:
             continue
         print(f"  {inc['id']} ...", file=sys.stderr, flush=True)
-        inv = investigate_warehouse(wh, dag, inc, model, max_steps=max_steps)
+        inv = investigate_warehouse(wh, dag, as_seen(inc, len(rows) + 1), model, max_steps=max_steps)
         edited, tr = inc["label"]["fix_targets"][0], trace(dag, inc["node_status"], inc["symptom_node"])
         right = bool(inv.submitted and inv.fix_target == edited)
         agrees = bool(inv.submitted and inv.fix_target == tr.fix_target)
@@ -244,16 +245,17 @@ def run_fixer(model, only: list[str] | None = None, out: Path | None = None, max
            "mode": ("model drafts SQL with the checker as tools it must use; only a rehearsed fix can be submitted"
                     + ("; it can also read what was deployed since the last good run" if history else "")
                     if checker else "model drafts SQL; kept only if the warehouse is right again"),
-           "incidents": 0, "rows": rows}
+           "ids_hidden_from_model": True, "incidents": 0, "rows": rows}
     for inc in each_break(wh):
         if (only and inc["id"] not in only) or inc["symptom_node"] is None:
             continue
         print(f"  {inc['id']} ...", file=sys.stderr, flush=True)
         session = None
+        seen = as_seen(inc, len(rows) + 1)      # the model never sees the break's id or its label
         if checker:
-            inv, sql, session = fix.draft_checked(wh, dag, inc, model, max_steps=max_steps or 26, history=history)
+            inv, sql, session = fix.draft_checked(wh, dag, seen, model, max_steps=max_steps or 26, history=history)
         else:
-            inv, sql = fix.draft(wh, dag, inc, model, max_steps=max_steps or 20)
+            inv, sql = fix.draft(wh, dag, seen, model, max_steps=max_steps or 20)
         edited = inc["label"]["fix_targets"][0]
         row = {"id": inc["id"], "split": inc["label"]["split"], "edited": edited, "symptom": inc["symptom"],
                "checks_see_it": inc["label"]["probe_sees_it_at_the_source"],

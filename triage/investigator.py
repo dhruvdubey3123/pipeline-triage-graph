@@ -282,6 +282,7 @@ class Investigation:
     plan: list[str] = field(default_factory=list)
     steps: list[dict] = field(default_factory=list)   # every call, its arguments, and what came back
     answer: str = ""
+    nudged: bool = False                              # it answered in text once and was told to use a tool
     closed: dict | None = None                        # ended by a tool other than the terminal one: its arguments
 
 
@@ -300,7 +301,8 @@ def run_tool(spec: ToolSpec, raw_args: Any) -> tuple[bool, str]:
 
 def investigate(incident: dict, dag: PipelineDAG, library: CaseLibrary, model: ChatModel,
                 max_steps: int = 14, specs: list[ToolSpec] | None = None, instructions: str = INSTRUCTIONS,
-                task_text: str | None = None, also_ends: tuple[str, ...] = ()) -> Investigation:
+                task_text: str | None = None, also_ends: tuple[str, ...] = (),
+                nudge: str | None = None) -> Investigation:
     """`specs`, `instructions` and `task_text` let the same loop run over a different set of read-only
     tools (triage/warehouse/investigate.py runs it against a real warehouse). The terminal tool keeps
     its name, and the first valid call to it still ends the investigation."""
@@ -323,6 +325,10 @@ def investigate(incident: dict, dag: PipelineDAG, library: CaseLibrary, model: C
         calls = msg.get("tool_calls") or []
         if not calls:
             out.answer = re.sub(r"<think>.*?</think>", "", msg.get("content") or "", flags=re.S).strip()
+            if nudge and not out.nudged:            # text ends nothing; say so once, then take it as final
+                out.nudged = True
+                messages += [{"role": "assistant", "content": out.answer}, {"role": "user", "content": nudge}]
+                continue
             break
         call = calls[0]                             # one action per turn keeps the log readable
         name, raw = call["function"]["name"], call["function"].get("arguments") or {}

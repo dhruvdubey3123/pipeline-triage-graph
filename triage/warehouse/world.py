@@ -38,6 +38,14 @@ def cases(wh: Warehouse) -> list[dict]:
     return out
 
 
+def as_seen(incident: dict, n: int) -> dict:
+    """The incident as whoever triages it may see it. The case id says what kind of fault it is and
+    often which table, and the label holds the answer, so neither goes along: the id is replaced by a
+    plain number and only the complaint and the health checks are kept."""
+    return {"id": f"INC-{n:03d}", "symptom_node": incident["symptom_node"], "symptom": incident["symptom"],
+            "node_status": incident["node_status"]}
+
+
 def stage(wh: Warehouse, c: dict) -> dict:
     """Put the warehouse into the state of this case and return the incident as the agent gets it."""
     wh.mark_good()

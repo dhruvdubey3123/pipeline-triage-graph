@@ -36,6 +36,7 @@ from ..investigator import TERMINAL, ChatModel, Investigation, NodeArg, ToolSpec
 from .build import RAW as RAW_TABLES
 from .build import Warehouse
 from .investigate import tools as read_tools
+from .pipeline import BY_ID as BY_NODE
 from .probe import observe_sources
 
 INSTRUCTIONS = (
@@ -145,6 +146,7 @@ class Session:
     verified_on_try: int | None = None
     refusals: list = field(default_factory=list)       # reasons the harness refused a call
     asked_sources: bool = False
+    no_ops: int = 0                                    # rehearsals of SQL that changed no table
     asked_changes: bool = False
     closed: dict | None = None                         # ended without a fix: {"kind", "source_table", "reason"}
 
@@ -152,13 +154,20 @@ class Session:
 def rehearse(wh: Warehouse, node: str, sql: str, symptom_node: str) -> dict:
     """Run a fix and put everything back, whatever the result. Applying for real is a separate step
     that happens after a person approves."""
-    prior = wh.sql(node)
+    prior, before = wh.sql(node), _fingerprint(wh)
     wh.set_sql(node, sql, record=False)
     wh.run_cycle()
     out = wh.outcome(symptom_node, allowed=(node,))
+    out["tables_changed"] = [n for n, v in _fingerprint(wh).items() if v != before[n]]
     wh.set_sql(node, prior, record=False)
     wh.run_cycle()
     return out
+
+
+def _fingerprint(wh: Warehouse) -> dict:
+    """What every table holds right now. Compared before and after a rehearsal, it says whether the
+    new SQL changed anything at all, which needs no knowledge of what the right answer is."""
+    return {n: wh.checksum(n) if wh.last_run(n)["status"] == "success" else wh.last_run(n)["status"] for n in BY_NODE}
 
 
 HISTORY_NOTE = (" You also have recent_changes: the SQL that was deployed since the last good run, as a diff. A recent "
@@ -166,7 +175,10 @@ HISTORY_NOTE = (" You also have recent_changes: the SQL that was deployed since 
 
 OPEN_INSTRUCTIONS = (
     "You are on call for a data warehouse. Every node is a SQL procedure that rebuilds one table from the tables it "
-    "reads, and the first nodes read source tables that are loaded from outside. A person says a report looks wrong. "
+    "reads, and the first nodes read source tables that are loaded from outside. The source tables are the raw ones "
+    "(raw.orders, raw.lineitem, raw.customer, raw.supplier, raw.partsupp, raw.nation, raw.region). A node named stg_, "
+    "int_, mart_ or rpt_ is a procedure, never a source: if its checks fail and no raw table's do, look at its SQL. "
+    "A person says a report looks wrong. "
     "There are three things that can be true, and you have to find out which. One: a procedure's SQL is wrong. Then "
     "write its corrected SQL and prove it. Two: the SQL is all correct and a source table arrived bad (rows missing, "
     "loaded twice, a column not filled, a value in the wrong unit). No SQL change is the right fix for that: the "
@@ -180,6 +192,9 @@ OPEN_INSTRUCTIONS = (
     "that SQL and it is correct. Change as little as possible and keep every column. If you cannot tell, do not "
     "guess: say so in plain text and the incident goes to a person."
 )
+NUDGE = ("You answered in text, and text ends nothing. End the incident with a tool call: submit_diagnosis with a fix "
+         "that try_fix verified, or close_without_fix. If you cannot tell what is wrong, reply with the one word UNSURE "
+         "and the incident goes to a person.")
 
 
 class Close(BaseModel):
@@ -247,6 +262,12 @@ def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Sess
         session.tries += 1
         out = rehearse(wh, fix_target, clean, symptom)
         left = MAX_TRIES - session.tries
+        if not out["tables_changed"]:
+            # SQL that builds exactly the tables the deployed SQL builds is not a fix, whatever it says it
+            # corrects. Without this, a rewrite of a procedure that was never wrong passes the rehearsal.
+            session.no_ops += 1
+            return (f"not a fix: this SQL builds exactly the same tables as the SQL deployed now, so it corrects nothing. "
+                    f"Either the fault is somewhere else or there is no fault in the SQL. {left} tries left.")
         if out["functional"] and out["integrity"]:
             session.verified.append((fix_target, clean))
             session.reasons[(fix_target, clean)] = reason.strip()
@@ -324,7 +345,7 @@ def draft_checked(wh: Warehouse, dag: PipelineDAG, incident: dict, model: ChatMo
     inv = investigate(incident, dag, None, model, max_steps=max_steps,
                       specs=checked_tools(wh, dag, incident, session, history, open_world),
                       instructions=(OPEN_INSTRUCTIONS if open_world else CHECKED_INSTRUCTIONS) + (HISTORY_NOTE if history else ""),
-                      task_text=task, also_ends=(CLOSE,) if open_world else ())
+                      task_text=task, also_ends=(CLOSE,) if open_world else (), nudge=NUDGE if open_world else None)
     if inv.closed:
         return inv, None, session
     if inv.submitted:

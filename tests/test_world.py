@@ -174,3 +174,67 @@ def test_reloading_a_source_that_was_fine_changes_nothing(wh):
     assert wh.reload_sources(only=f.table) == [f.table]
     wh.run_cycle()
     assert not wh.affected()
+
+
+# ------------------------------------------------------------------ what a first run with a model exposed
+
+def test_the_model_is_never_shown_the_case_id_or_the_label(wh, all_cases):
+    """The first sample was run with ids like source.cost_in_cents in the task text. The model read
+    the answer off them. Nothing the model receives may contain a case id, its kind or its label."""
+    from evals.warehouse_eval import each_break
+
+    class Listen:
+        model, said = "listen", ""
+
+        def chat(self, messages, tools):
+            Listen.said += json.dumps(messages) + json.dumps(tools)
+            return {"content": "UNSURE"}
+
+    for n, c in enumerate(all_cases[::3], 1):
+        seen = world_eval.as_seen(world_eval.stage(wh, c), n)
+        Listen.said = ""
+        fix.draft_checked(wh, as_dag(), seen, Listen(), open_world=True, history=True)
+        world_eval.restore(wh)
+        assert c["id"] not in Listen.said and c["id"].split(".")[1] not in Listen.said and (c["kind"] == "none" or c["what"] not in Listen.said), c["id"]
+        assert "gen_" not in Listen.said and "mistaken_" not in Listen.said
+        assert set(seen) == {"id", "symptom_node", "symptom", "node_status"} and seen["id"] == f"INC-{n:03d}"
+    for n, inc in enumerate(each_break(wh), 1):
+        seen, Listen.said = world_eval.as_seen(inc, n), ""
+        fix.draft_checked(wh, as_dag(), seen, Listen())
+        fix.draft(wh, as_dag(), seen, Listen())
+        assert inc["id"] not in Listen.said and inc["label"]["family"] not in Listen.said and "label" not in seen, inc["id"]
+
+
+def test_sql_that_changes_no_table_is_not_accepted_as_a_fix(wh, all_cases):
+    """What the model did on a mistaken complaint: rewrote a correct formula into a different one that
+    happens to give the same numbers on this data. It passed, because the warehouse was right before."""
+    case = next(c for c in all_cases if c["id"] == "none.mistaken_2")
+    node = "rpt_regional_summary"
+    same = BY_ID[node].sql.replace("(select sum(margin) / sum(revenue) from mart_supplier_performance)",
+                                   "(select sum(margin) / (select sum(revenue) from mart_customer_revenue) from mart_supplier_performance)")
+    assert same != BY_ID[node].sql
+    got, session, _, inv = play(wh, case, FIRST + [("check_node", {"node": node}), ("try_fix", {"fix_target": node, "sql": same, "reason": "r"}),
+                                                   ("submit_diagnosis", {"fix_target": node, "sql": same, "reason": "r"})])
+    assert inv.steps[3]["result"].startswith("not a fix") and session.no_ops == 1 and not session.verified
+    assert got == "handed to a person" and not inv.steps[4]["ok"]
+
+
+def test_an_answer_in_text_gets_one_reminder_to_use_a_tool(wh, all_cases):
+    case = next(c for c in all_cases if c["kind"] == "none")
+    inc = world_eval.stage(wh, case)
+
+    class Talks:
+        model, turns = "talks", 0
+
+        def chat(self, messages, tools):
+            Talks.turns += 1
+            if Talks.turns <= 2:
+                return {"tool_calls": [{"id": f"c{Talks.turns}", "function": {"name": ("where_checks_fail", "check_sources")[Talks.turns - 1], "arguments": "{}"}}]}
+            if Talks.turns == 3:
+                return {"content": 'I would close it: {"kind": "nothing_wrong"}'}
+            assert "text ends nothing" in messages[-1]["content"]
+            return {"tool_calls": [{"id": "c4", "function": {"name": "close_without_fix", "arguments": json.dumps({"kind": "nothing_wrong", "reason": "all correct"})}}]}
+
+    inv, sql, session = fix.draft_checked(wh, as_dag(), inc, Talks(), open_world=True)
+    world_eval.restore(wh)
+    assert inv.nudged and session.closed["kind"] == "nothing_wrong" and Talks.turns == 4
