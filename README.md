@@ -443,8 +443,29 @@ What to hold against these numbers. One run. They are in-sample for three change
 (`evals/runs/world/sample12_ids_visible.json`) was run with case ids in the task text, and the model read answers off
 them, most plainly for the price in cents; its counts are not used. The results file for the run above was written before
 the writer added an `ids_hidden_from_model` marker; the ids were hidden at that commit (`8270fc8`), and a test checks the
-file contains none. Twenty-nine generated faults is a small set and 13 of them are aggregate swaps. The deploy-history
-arm has not been run.
+file contains none. Twenty-nine generated faults is a small set and 13 of them are aggregate swaps.
+
+**With the deploy history** (same model, 14 Nov 2026, ids hidden, `--history`; one run each).
+
+| Set | Without history | With history |
+|---|---|---|
+| `sql` (29) | 21 fixed, 6 to a person, 2 blamed a source | **23** fixed, 6 to a person, **0** blamed a source |
+| `source` (5) | 4 named the bad table, 1 to a person | 4 named the bad table, 1 to a person (the price in cents again) |
+| `none` (4) | 1 said nothing was wrong, 3 to a person | 1 said nothing was wrong, 1 to a person, **2 blamed a source** |
+| the original twelve | 10 fixed, 2 none submitted | **8** fixed, 4 none submitted |
+
+- **No wrong fix was applied in either arm.**
+- **The history helped where it has something to say.** On generated SQL faults it fixed two more (tunable 7 of 9, held
+  in 5 of 5, held out 11 of 15) and stopped blaming sources for SQL faults.
+- **It hurt where it is empty.** On mistaken complaints the history shows no change, and twice the model took that as a
+  reason to blame a source table the checks called fine. The harness accepted both closures: the same gap as above.
+- **On the twelve it did worse.** It submitted no fix for `part_without_supplier`, `order_without_line`,
+  `cost_not_defaulted` and `one_row_per_month`; without the history it fixed two of those. The harness refused 3 calls.
+  One run cannot separate this from noise, and the twelve were written by hand as edits that the deploy table records
+  differently from the generated ones, which may matter.
+- The numbers come from the terminal output of the two runs. The results files
+  (`evals/world_history_results_llm.json`, `evals/warehouse_fix_history_results_llm.json`) are on the machine that ran
+  them and are not yet in the repo.
 
 `world.schedule` deals the same cases out one night at a time, with quiet nights between, for the chat in the harness
 repo.
