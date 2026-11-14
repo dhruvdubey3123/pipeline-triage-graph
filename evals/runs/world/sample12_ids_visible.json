@@ -1,0 +1,415 @@
+{
+  "model": "openai/gpt-oss-120b",
+  "host": "openrouter.ai",
+  "mode": "open world: a fix, a bad source, or nothing wrong",
+  "sample": 12,
+  "seed": 0,
+  "rows": [
+    {
+      "id": "gen_column_dropped.stg_lineitem_1",
+      "kind": "sql",
+      "split": "held_in",
+      "what": "a column the staging model stopped selecting",
+      "symptom": "rpt_revenue_dashboard has not refreshed",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [],
+      "result": "fixed",
+      "right": true,
+      "node": "stg_lineitem",
+      "sql": "select l_orderkey as order_id, l_partkey as part_id, l_suppkey as supplier_id, l_quantity as quantity, l_extendedprice as extended_price, l_discount as discount, l_linenumber as line_no from raw.lineitem",
+      "closed": null,
+      "reason": "The stg_lineitem table dropped the required line_no column, causing int_order_items to fail; restored the column in the SELECT.",
+      "said_instead": null,
+      "tries": 1,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 7,
+      "calls": [
+        "where_checks_fail()",
+        "check_sources()",
+        "read_sql(node=stg_lineitem)",
+        "upstream(node=rpt_revenue_dashboard)",
+        "check_node(node=stg_lineitem)",
+        "try_fix(fix_target=stg_lineitem, sql=select l_orderkey as order_id, l_partkey )",
+        "submit_diagnosis(fix_target=stg_lineitem, sql=select l_orderkey as order_id, l_partkey )"
+      ]
+    },
+    {
+      "id": "gen_column_dropped.stg_supplier_1",
+      "kind": "sql",
+      "split": "evolve",
+      "what": "a column the staging model stopped selecting",
+      "symptom": "rpt_regional_summary has not refreshed",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [],
+      "result": "handed to a person",
+      "right": false,
+      "node": null,
+      "sql": null,
+      "closed": null,
+      "reason": "",
+      "said_instead": "The health\u2011check logs show that the first node where checks fail is **stg_supplier**. All source tables pass the shape checks, so the problem is not a downstream SQL bug but bad source data arriving in `stg_supplier`.  \n\n**Action:** close the incident as a source\u2011data issue.  \n\n---  \n\n```json\n{\n  \"kind\": \"source_data\",\n  \"source_table\": \"stg_supplier\",\n  \"reason\": \"Source table stg_supplier failed health checks, causing downstream rpt_regional_summary not to refresh.\"\n}\n```",
+      "tries": 0,
+      "harness_refusals": [
+        "call where_checks_fail and check_sources before closing an incident without a fix"
+      ],
+      "read_the_history": null,
+      "tool_calls": 4,
+      "calls": [
+        "where_checks_fail()",
+        "close_without_fix(kind=source_data, source_table=stg_supplier, reason=Source table stg_s) -> ERROR: call where_checks_fail and check_sources before closing an incident without a fix",
+        "check_sources()",
+        "check_node(node=stg_supplier)"
+      ]
+    },
+    {
+      "id": "gen_aggregate.mart_daily_revenue_1",
+      "kind": "sql",
+      "split": "ood",
+      "what": "a total that became an average, or a distinct count that stopped being distinct",
+      "symptom": "trailing_7d_revenue in rpt_revenue_dashboard looks wrong",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [],
+      "result": "fixed",
+      "right": true,
+      "node": "mart_daily_revenue",
+      "sql": "select order_date,\n       count(distinct order_id) as orders,\n       sum(net_revenue) as revenue\nfrom int_order_items\nwhere order_date > (select as_of from meta) - 90\n  and order_date <= (select as_of from meta)\ngroup by order_date",
+      "closed": null,
+      "reason": "The procedure used avg(net_revenue) which gave per\u2011order average revenue; it should sum net_revenue to get daily total revenue.",
+      "said_instead": null,
+      "tries": 1,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 5,
+      "calls": [
+        "where_checks_fail()",
+        "check_node(node=mart_daily_revenue)",
+        "read_sql(node=mart_daily_revenue)",
+        "try_fix(fix_target=mart_daily_revenue, sql=select order_date,\n       count(dis)",
+        "submit_diagnosis(fix_target=mart_daily_revenue, sql=select order_date,\n       count(dis)"
+      ]
+    },
+    {
+      "id": "gen_join_kind.mart_customer_revenue_1",
+      "kind": "sql",
+      "split": "held_in",
+      "what": "a left join that became an inner join, so unmatched rows disappear",
+      "symptom": "rpt_revenue_dashboard has 29 rows where there were 30",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [],
+      "result": "fixed",
+      "right": true,
+      "node": "mart_customer_revenue",
+      "sql": "select g.customer_id, g.region, g.segment,\n       coalesce(sum(i.net_revenue), 0) as revenue,\n       count(distinct i.order_id) as orders\nfrom int_customer_geo g\nleft join int_order_items i on i.customer_id = g.customer_id\ngroup by g.customer_id, g.region, g.segment",
+      "closed": null,
+      "reason": "The original inner join excluded customers without orders, causing the row count to be one short; switching to a left join includes all customers.",
+      "said_instead": null,
+      "tries": 1,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 7,
+      "calls": [
+        "where_checks_fail()",
+        "upstream(node=gen_join_kind.mart_customer_revenue_1) -> ERROR: 'gen_join_kind.mart_customer_revenue_1' is not in this pipeline. Call pipeline to see the nodes.",
+        "check_sources()",
+        "read_sql(node=mart_customer_revenue)",
+        "check_node(node=mart_customer_revenue)",
+        "try_fix(fix_target=mart_customer_revenue, sql=select g.customer_id, g.region, )",
+        "submit_diagnosis(fix_target=mart_customer_revenue, sql=select g.customer_id, g.region, )"
+      ]
+    },
+    {
+      "id": "gen_aggregate.rpt_regional_summary_1",
+      "kind": "sql",
+      "split": "ood",
+      "what": "a total that became an average, or a distinct count that stopped being distinct",
+      "symptom": "revenue in rpt_regional_summary looks wrong",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [],
+      "result": "fixed",
+      "right": true,
+      "node": "rpt_regional_summary",
+      "sql": "select m.region,\n       count(*) as customers,\n       sum(m.revenue) as revenue,\n       sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share,\n       (select sum(margin) / sum(revenue) from mart_supplier_performance) as margin_rate\nfrom mart_customer_revenue m\ngroup by m.region",
+      "closed": null,
+      "reason": "The revenue column incorrectly used avg() instead of sum(), leading to wrong revenue totals.",
+      "said_instead": null,
+      "tries": 1,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 5,
+      "calls": [
+        "where_checks_fail()",
+        "check_node(node=rpt_regional_summary)",
+        "read_sql(node=rpt_regional_summary)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )",
+        "submit_diagnosis(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )"
+      ]
+    },
+    {
+      "id": "gen_aggregate.rpt_regional_summary_4",
+      "kind": "sql",
+      "split": "ood",
+      "what": "a total that became an average, or a distinct count that stopped being distinct",
+      "symptom": "margin_rate in rpt_regional_summary looks wrong",
+      "checks_fail_somewhere": false,
+      "source_checks_fail": [],
+      "result": "fixed",
+      "right": true,
+      "node": "rpt_regional_summary",
+      "sql": "select m.region,\n       count(*) as customers,\n       sum(m.revenue) as revenue,\n       sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share,\n       (select sum(margin) / sum(revenue) from mart_supplier_performance) as margin_rate\nfrom mart_customer_revenue m\ngroup by m.region",
+      "closed": null,
+      "reason": "margin_rate was calculated using avg(margin) over supplier revenue; corrected to total margin divided by total revenue",
+      "said_instead": null,
+      "tries": 2,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 9,
+      "calls": [
+        "where_checks_fail()",
+        "upstream(node=gen_aggregate.rpt_regional_summary_4) -> ERROR: 'gen_aggregate.rpt_regional_summary_4' is not in this pipeline. Call pipeline to see the nodes.",
+        "pipeline()",
+        "read_sql(node=rpt_regional_summary)",
+        "profile(node=mart_supplier_performance)",
+        "check_node(node=rpt_regional_summary)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )",
+        "try_fix(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )",
+        "submit_diagnosis(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )"
+      ]
+    },
+    {
+      "id": "source.lineitems_late",
+      "kind": "source",
+      "split": "held_in",
+      "what": "the last three days of line items have not arrived",
+      "symptom": "revenue, orders, latest_day, trailing_7d_revenue in rpt_revenue_dashboard look wrong",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [
+        "lineitem"
+      ],
+      "result": "named the bad source",
+      "right": true,
+      "node": null,
+      "sql": null,
+      "closed": {
+        "kind": "source_data",
+        "source_table": "lineitem",
+        "reason": "raw.lineitem is missing rows (60091 vs 60175) and its latest date is older (2027-03-04 vs 2027-03-08), causing downstream revenue metrics to be off."
+      },
+      "reason": "raw.lineitem is missing rows (60091 vs 60175) and its latest date is older (2027-03-04 vs 2027-03-08), causing downstream revenue metrics to be off.",
+      "said_instead": null,
+      "tries": 0,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 4,
+      "calls": [
+        "where_checks_fail()",
+        "check_sources()",
+        "upstream(node=mart_daily_revenue)",
+        "close_without_fix(kind=source_data, source_table=raw.lineitem, reason=raw.lineitem is mi)"
+      ]
+    },
+    {
+      "id": "source.segment_not_filled",
+      "kind": "source",
+      "split": "held_in",
+      "what": "the source stopped filling the market segment for some customers",
+      "symptom": "rpt_revenue_dashboard has 35 rows where there were 30",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [
+        "customer"
+      ],
+      "result": "named the bad source",
+      "right": true,
+      "node": null,
+      "sql": null,
+      "closed": {
+        "kind": "source_data",
+        "source_table": "customer",
+        "reason": "c_mktsegment column has unexpected nulls (16.7% of rows) causing downstream row count mismatch in rpt_revenue_dashboard"
+      },
+      "reason": "c_mktsegment column has unexpected nulls (16.7% of rows) causing downstream row count mismatch in rpt_revenue_dashboard",
+      "said_instead": null,
+      "tries": 0,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 3,
+      "calls": [
+        "where_checks_fail()",
+        "check_sources()",
+        "close_without_fix(kind=source_data, source_table=raw.customer, reason=c_mktsegment colum)"
+      ]
+    },
+    {
+      "id": "source.suppliers_missing",
+      "kind": "source",
+      "split": "held_in",
+      "what": "a fifth of the suppliers are missing from the extract",
+      "symptom": "margin_rate in rpt_regional_summary looks wrong",
+      "checks_fail_somewhere": true,
+      "source_checks_fail": [
+        "supplier"
+      ],
+      "result": "named the bad source",
+      "right": true,
+      "node": null,
+      "sql": null,
+      "closed": {
+        "kind": "source_data",
+        "source_table": "supplier",
+        "reason": "raw.supplier is missing rows (80 vs 100), causing downstream deviations in stg_supplier and ultimately margin_rate in rpt_regional_summary."
+      },
+      "reason": "raw.supplier is missing rows (80 vs 100), causing downstream deviations in stg_supplier and ultimately margin_rate in rpt_regional_summary.",
+      "said_instead": null,
+      "tries": 0,
+      "harness_refusals": [
+        "call where_checks_fail and check_sources before closing an incident without a fix"
+      ],
+      "read_the_history": null,
+      "tool_calls": 6,
+      "calls": [
+        "where_checks_fail()",
+        "status(node=rpt_regional_summary)",
+        "upstream(node=rpt_regional_summary)",
+        "close_without_fix(kind=source_data, source_table=stg_supplier, reason=stg_supplier is mi) -> ERROR: call where_checks_fail and check_sources before closing an incident without a fix",
+        "check_sources()",
+        "close_without_fix(kind=source_data, source_table=raw.supplier, reason=raw.supplier is mi)"
+      ]
+    },
+    {
+      "id": "source.cost_in_cents",
+      "kind": "source",
+      "split": "held_in",
+      "what": "the supplier price started arriving in cents instead of dollars",
+      "symptom": "margin_rate in rpt_regional_summary looks wrong",
+      "checks_fail_somewhere": false,
+      "source_checks_fail": [],
+      "result": "handed to a person",
+      "right": false,
+      "node": null,
+      "sql": null,
+      "closed": null,
+      "reason": "",
+      "said_instead": "**Diagnosis**\n\nThe health\u2011check pipeline shows no structural problems in any source or intermediate table, and all node\u2011level checks are unverified (they pass).  \nReading the SQL for `rpt_regional_summary` reveals that the `margin_rate` is derived from the `mart_supplier_performance` view, which aggregates **cost** from `int_part_cost`.  \n\nThe source table that feeds `int_part_cost` is `source.cost_in_cents`. Its column stores cost in **cents**, while the rest of the warehouse (revenue, margin calculations) expects **dollar** values. Because the unit conversion is missing, the computed `margin_rate` is dramatically lower than it should be, causing the report to look wrong.\n\n**Correct action**\n\nThe SQL of the procedures is correct; the problem is the raw source data being loaded with the wrong unit. The source owner must reload `source.cost_in_cents` with values expressed in dollars (or add a proper conversion step upstream, but that would hide the data issue).\n\n**Close the incident**\n\n```json\n{\n  \"kind\": \"source_data\",\n  \"source_table\": \"source.cost_in_cents\",\n  \"reason\": \"Cost values are loaded in cents while the warehouse expects dollars, causing margin_rate to be mis\u2011calculated.\"\n}\n```",
+      "tries": 3,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 17,
+      "calls": [
+        "where_checks_fail()",
+        "upstream(node=rpt_regional_summary)",
+        "read_sql(node=rpt_regional_summary)",
+        "read_sql(node=mart_supplier_performance)",
+        "check_node(node=rpt_regional_summary)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select\n  m.region,\n  count(*) as ) -> ERROR: this SQL does not run: Binder Error: Referenced table \"o\" not found!",
+        "try_fix(fix_target=rpt_regional_summary, sql=select\n  m.region,\n  count(*) as ) -> ERROR: this SQL does not run: Binder Error: Referenced table \"o\" not found!",
+        "profile(node=stg_orders)",
+        "read_sql(node=int_customer_geo)",
+        "read_sql(node=mart_customer_revenue)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select\n  m.region,\n  count(*) as )",
+        "try_fix(fix_target=rpt_regional_summary, sql=select\n  m.region,\n  count(*) as )",
+        "profile(node=int_part_cost)",
+        "profile(node=mart_customer_revenue)",
+        "upstream(node=int_part_cost)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select\n  m.region,\n  count(*) as )",
+        "check_sources()"
+      ]
+    },
+    {
+      "id": "none.mistaken_2",
+      "kind": "none",
+      "split": "held_in",
+      "what": "nothing is wrong",
+      "symptom": "margin_rate in rpt_regional_summary looks wrong",
+      "checks_fail_somewhere": false,
+      "source_checks_fail": [],
+      "result": "rewrote SQL that was right",
+      "right": false,
+      "node": "rpt_regional_summary",
+      "sql": "select m.region,\n       count(*) as customers,\n       sum(m.revenue) as revenue,\n       sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share,\n       (select sum(margin) / (select sum(revenue) from mart_customer_revenue) from mart_supplier_performance) as margin_rate\nfrom mart_customer_revenue m\ngroup by m.region",
+      "closed": null,
+      "reason": "margin_rate incorrectly used supplier revenue as denominator; corrected to use total customer revenue",
+      "said_instead": null,
+      "tries": 1,
+      "harness_refusals": [
+        "call check_node on rpt_regional_summary before proposing a fix for it"
+      ],
+      "read_the_history": null,
+      "tool_calls": 10,
+      "calls": [
+        "where_checks_fail()",
+        "upstream(node=rpt_regional_summary)",
+        "read_sql(node=rpt_regional_summary)",
+        "profile(node=mart_supplier_performance)",
+        "read_sql(node=mart_customer_revenue)",
+        "profile(node=stg_supplier)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) ) -> ERROR: call check_node on rpt_regional_summary before proposing a fix for it",
+        "check_node(node=rpt_regional_summary)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )",
+        "submit_diagnosis(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )"
+      ]
+    },
+    {
+      "id": "none.mistaken_4",
+      "kind": "none",
+      "split": "held_in",
+      "what": "nothing is wrong",
+      "symptom": "revenue_share in rpt_regional_summary does not look right",
+      "checks_fail_somewhere": false,
+      "source_checks_fail": [],
+      "result": "handed to a person",
+      "right": false,
+      "node": null,
+      "sql": null,
+      "closed": null,
+      "reason": "",
+      "said_instead": "**Diagnosis**\n\nAll health\u2011check checks pass, and the SQL of every upstream node (including `rpt_regional_summary`) is syntactically correct and logically sound. The attempts to rewrite the `rpt_regional_summary` query (fixing the margin calculation and expressing percentages) did **not** make the report correct, which indicates the problem is not in the SQL logic.\n\nThe only remaining plausible cause is a data\u2011quality issue that is invisible to the shape\u2011only health checks. The `revenue_share` column is computed as\n\n```sql\nsum(m.revenue) / (select sum(revenue) from mart_customer_revenue)\n```\n\nwhere `m.revenue` comes from `mart_customer_revenue`. `mart_customer_revenue` aggregates `i.net_revenue` from **`int_order_items`**. If the `net_revenue` values in `int_order_items` are loaded in a different unit (e.g., cents) than the values used elsewhere (e.g., dollars), the division will produce a revenue\u2011share that is off by a factor of 100 (or similar). This unit mismatch would not be caught by the shape\u2011only `check_sources` health check, because row counts, key uniqueness, null counts, and dates all match the last good run.\n\nTherefore the root cause is **bad source data** \u2013 the `int_order_items` (or its upstream staging table `stg_lineitem`) contains revenue values in the wrong unit.\n\n**Action**\n\nClose the incident without changing any SQL, and ask the owner of the source table to reload it with the correct units.\n\n```json\n{\n  \"kind\": \"source_data\",\n  \"source_table\": \"int_order_items\",\n  \"reason\": \"Revenue values are loaded in the wrong unit (e.g., cents instead of dollars), causing the revenue_share calculation to be incorrect. The source data must be reloaded with proper units.\"\n}\n```",
+      "tries": 2,
+      "harness_refusals": [],
+      "read_the_history": null,
+      "tool_calls": 9,
+      "calls": [
+        "where_checks_fail()",
+        "upstream(node=rpt_regional_summary)",
+        "read_sql(node=rpt_regional_summary)",
+        "read_sql(node=mart_supplier_performance)",
+        "read_sql(node=mart_customer_revenue)",
+        "check_node(node=rpt_regional_summary)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select\n  g.region,\n  count(distin)",
+        "try_fix(fix_target=rpt_regional_summary, sql=select\n  g.region,\n  count(distin)",
+        "check_sources()"
+      ]
+    }
+  ],
+  "summary": {
+    "sql": {
+      "cases": 6,
+      "right": 5,
+      "right_answer": "fixed",
+      "results": {
+        "fixed": 5,
+        "handed to a person": 1
+      },
+      "evolve": "0 of 1",
+      "held_in": "2 of 2",
+      "ood": "3 of 3"
+    },
+    "source": {
+      "cases": 4,
+      "right": 3,
+      "right_answer": "named the bad source",
+      "results": {
+        "named the bad source": 3,
+        "handed to a person": 1
+      }
+    },
+    "none": {
+      "cases": 2,
+      "right": 0,
+      "right_answer": "said nothing was wrong",
+      "results": {
+        "rewrote SQL that was right": 1,
+        "handed to a person": 1
+      }
+    }
+  }
+}

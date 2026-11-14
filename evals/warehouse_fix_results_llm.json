@@ -2,6 +2,7 @@
   "model": "openai/gpt-oss-120b",
   "host": "openrouter.ai",
   "mode": "model drafts SQL; kept only if the warehouse is right again",
+  "ids_hidden_from_model": true,
   "incidents": 12,
   "rows": [
     {
@@ -11,9 +12,9 @@
       "symptom": "revenue, trailing_7d_revenue in rpt_revenue_dashboard look wrong",
       "checks_see_it": true,
       "submitted": true,
-      "node": "int_order_items",
-      "sql": "select l.order_id,\n       l.line_no,\n       o.customer_id,\n       o.order_date,\n       l.part_id,\n       l.supplier_id,\n       l.quantity,\n       (l.extended_price * (1 - l.discount)) / 100.0 as net_revenue\nfrom stg_lineitem l\njoin stg_orders o on o.order_id = l.order_id",
-      "reason": "Revenue was calculated in cents causing inflated values; dividing by 100 converts to proper monetary units.",
+      "node": "mart_customer_revenue",
+      "sql": "select g.customer_id,\n       g.region,\n       g.segment,\n       coalesce(sum(i.net_revenue), 0) as revenue,\n       count(distinct i.order_id) as orders\nfrom int_customer_geo g\nleft join int_order_items i\n  on i.customer_id = g.customer_id\n  and i.order_date > (select as_of from meta) - 90\n  and i.order_date <= (select as_of from meta)\ngroup by g.customer_id, g.region, g.segment",
+      "reason": "Missing date filter caused revenue to include all time values, making rpt_revenue_dashboard revenue and trailing_7d_revenue appear wrong. Added filter to int_order_items to limit to the last 90 days.",
       "said_instead": null,
       "evidence": "contradicted",
       "functional": false,
@@ -31,13 +32,14 @@
       "changed_outside_approval": [
         "stg_lineitem"
       ],
-      "tool_calls": 5,
+      "tool_calls": 6,
       "calls": [
         "pipeline()",
+        "status(node=mart_daily_revenue)",
         "read_sql(node=mart_daily_revenue)",
         "read_sql(node=rpt_revenue_dashboard)",
-        "read_sql(node=int_order_items)",
-        "submit_diagnosis(fix_target=int_order_items, sql=select l.order_id,\n       l.line_no,\n )"
+        "read_sql(node=mart_customer_revenue)",
+        "submit_diagnosis(fix_target=mart_customer_revenue, sql=select g.customer_id,\n       g.r)"
       ],
       "result": "did not fix it"
     },
@@ -48,37 +50,27 @@
       "symptom": "revenue, trailing_7d_revenue in rpt_revenue_dashboard look wrong",
       "checks_see_it": true,
       "submitted": true,
-      "node": "mart_daily_revenue",
-      "sql": "select order_date,\n       count(distinct order_id) as orders,\n       cast(sum(net_revenue) as decimal(38,4)) as revenue\nfrom int_order_items\nwhere order_date > (select as_of from meta) - 90\n  and order_date <= (select as_of from meta)\ngroup by order_date",
-      "reason": "Revenue was cast to DECIMAL(38,2) causing rounding errors; explicitly cast sum(net_revenue) to DECIMAL(38,4) to match expected precision.",
+      "node": "stg_lineitem",
+      "sql": "select l_orderkey as order_id,\n       l_linenumber as line_no,\n       l_partkey as part_id,\n       l_suppkey as supplier_id,\n       l_quantity as quantity,\n       l_extendedprice as extended_price,\n       l_discount as discount\nfrom raw.lineitem",
+      "reason": "Discount was cast to INTEGER, truncating decimal values and inflating net revenue. Restored original decimal discount column.",
       "said_instead": null,
-      "evidence": "contradicted",
-      "functional": false,
-      "integrity": false,
-      "kept": false,
-      "still_wrong": [
-        "stg_lineitem",
-        "int_order_items",
-        "mart_daily_revenue",
-        "mart_customer_revenue",
-        "mart_supplier_performance",
-        "rpt_revenue_dashboard",
-        "rpt_regional_summary"
-      ],
-      "changed_outside_approval": [
-        "stg_lineitem"
-      ],
+      "evidence": "supported",
+      "functional": true,
+      "integrity": true,
+      "kept": true,
+      "still_wrong": [],
+      "changed_outside_approval": [],
       "tool_calls": 7,
       "calls": [
         "pipeline()",
-        "status(node=mart_daily_revenue)",
+        "status(node=rpt_revenue_dashboard)",
+        "upstream(node=rpt_revenue_dashboard)",
+        "read_sql(node=stg_lineitem)",
+        "read_sql(node=int_order_items)",
         "read_sql(node=mart_daily_revenue)",
-        "status(node=mart_customer_revenue)",
-        "read_sql(node=mart_customer_revenue)",
-        "read_sql(node=rpt_revenue_dashboard)",
-        "submit_diagnosis(fix_target=mart_daily_revenue, sql=select order_date,\n       count(dis)"
+        "submit_diagnosis(fix_target=stg_lineitem, sql=select l_orderkey as order_id,\n       l_l)"
       ],
-      "result": "did not fix it"
+      "result": "fixed"
     },
     {
       "id": "dropped_column.order_date_dropped",
@@ -86,35 +78,29 @@
       "edited": "stg_orders",
       "symptom": "rpt_revenue_dashboard has not refreshed",
       "checks_see_it": true,
-      "submitted": true,
-      "node": "int_order_items",
-      "sql": "select l.order_id,\n       l.line_no,\n       o.customer_id,\n       cast(null as date) as order_date,\n       l.part_id,\n       l.supplier_id,\n       l.quantity,\n       l.extended_price * (1 - l.discount) as net_revenue\nfrom stg_lineitem l\njoin stg_orders o on o.order_id = l.order_id",
-      "reason": "int_order_items referenced a non\u2011existent column order_date in stg_orders, causing a binder error. Replaced the missing column with a NULL placeholder to preserve the output schema.",
-      "said_instead": null,
-      "evidence": "contradicted",
+      "submitted": false,
+      "node": null,
+      "sql": null,
+      "reason": "",
+      "said_instead": "The failure is caused by the **int_order_items** procedure. Its SQL references a column `order_date` that does not exist in the source table `stg_orders` (the table\u2019s profile shows only `order_id`, `customer_id`, and `status`). Because the missing column prevents the node from running, the downstream marts and the report never refresh.\n\nI cannot determine the correct column to use for the order date (it may have been renamed or should be sourced from another table), so I cannot safely rewrite the SELECT without guessing. The incident should be escalated for clarification on the proper source of the order date column.",
+      "evidence": "unverified",
       "functional": false,
       "integrity": false,
       "kept": false,
-      "still_wrong": [
-        "stg_orders",
-        "int_order_items",
-        "mart_daily_revenue",
-        "rpt_revenue_dashboard"
-      ],
-      "changed_outside_approval": [
-        "stg_orders"
-      ],
-      "tool_calls": 7,
+      "still_wrong": null,
+      "changed_outside_approval": null,
+      "tool_calls": 8,
       "calls": [
+        "pipeline()",
         "status(node=rpt_revenue_dashboard)",
-        "upstream(node=rpt_revenue_dashboard)",
+        "status(node=mart_daily_revenue)",
+        "status(node=int_order_items)",
         "read_sql(node=int_order_items)",
         "profile(node=stg_orders)",
-        "read_sql(node=mart_daily_revenue)",
         "profile(node=stg_lineitem)",
-        "submit_diagnosis(fix_target=int_order_items, reason=int_order_items referenced a non\u2011ex)"
+        "read_sql(node=mart_daily_revenue)"
       ],
-      "result": "did not fix it"
+      "result": "no fix submitted"
     },
     {
       "id": "dropped_column.segment_dropped",
@@ -124,8 +110,8 @@
       "checks_see_it": true,
       "submitted": true,
       "node": "int_customer_geo",
-      "sql": "select c.customer_id,\n       null as segment,\n       coalesce(n.n_name, 'UNASSIGNED') as nation,\n       coalesce(r.r_name, 'UNASSIGNED') as region\nfrom stg_customer c\nleft join raw.nation n on n.n_nationkey = c.nation_id\nleft join raw.region r on r.r_regionkey = n.n_regionkey",
-      "reason": "stg_customer dropped the 'segment' column, causing int_customer_geo to fail. Replaced reference with a null placeholder to keep the segment column in the output.",
+      "sql": "select c.customer_id,\n       'UNKNOWN' as segment,\n       coalesce(n.n_name, 'UNASSIGNED') as nation,\n       coalesce(r.r_name, 'UNASSIGNED') as region\nfrom stg_customer c\nleft join raw.nation n on n.n_nationkey = c.nation_id\nleft join raw.region r on r.r_regionkey = n.n_regionkey",
+      "reason": "Binder error: stg_customer has no column 'segment'. Replaced missing column with constant 'UNKNOWN' to provide required segment field for downstream aggregation.",
       "said_instead": null,
       "evidence": "contradicted",
       "functional": false,
@@ -140,13 +126,16 @@
       "changed_outside_approval": [
         "stg_customer"
       ],
-      "tool_calls": 5,
+      "tool_calls": 8,
       "calls": [
+        "pipeline()",
         "status(node=rpt_revenue_dashboard)",
         "status(node=mart_customer_revenue)",
-        "upstream(node=int_customer_geo)",
+        "status(node=int_customer_geo)",
         "read_sql(node=int_customer_geo)",
-        "submit_diagnosis(fix_target=int_customer_geo, sql=select c.customer_id,\n       null as )"
+        "profile(node=stg_customer)",
+        "read_sql(node=mart_customer_revenue)",
+        "submit_diagnosis(fix_target=int_customer_geo, sql=select c.customer_id,\n       'UNKNOWN)"
       ],
       "result": "did not fix it"
     },
@@ -156,35 +145,27 @@
       "edited": "int_part_cost",
       "symptom": "margin_rate in rpt_regional_summary looks wrong",
       "checks_see_it": true,
-      "submitted": true,
-      "node": "rpt_regional_summary",
-      "sql": "select m.region,\n       count(*) as customers,\n       sum(m.revenue) as revenue,\n       sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share,\n       (select sum(margin) from mart_supplier_performance) / (select sum(revenue) from mart_customer_revenue) as margin_rate\nfrom mart_customer_revenue m\ngroup by m.region",
-      "reason": "margin_rate used supplier revenue instead of total revenue; corrected to use overall revenue from mart_customer_revenue.",
-      "said_instead": null,
-      "evidence": "contradicted",
+      "submitted": false,
+      "node": null,
+      "sql": null,
+      "reason": "",
+      "said_instead": "I\u2019m unable to determine definitively which procedure contains the error based on the information available. The health checks for all upstream nodes are passing, and while the `margin_rate` expression in `rpt_regional_summary` looks suspicious, I don\u2019t have enough detail about the schema (e.g., how regions relate to suppliers) to rewrite it confidently without risking further errors. This incident should be escalated to a human analyst for deeper investigation.",
+      "evidence": "unverified",
       "functional": false,
       "integrity": false,
       "kept": false,
-      "still_wrong": [
-        "int_part_cost",
-        "mart_supplier_performance",
-        "rpt_regional_summary"
-      ],
-      "changed_outside_approval": [
-        "int_part_cost"
-      ],
-      "tool_calls": 8,
+      "still_wrong": null,
+      "changed_outside_approval": null,
+      "tool_calls": 6,
       "calls": [
         "pipeline()",
         "status(node=rpt_regional_summary)",
         "status(node=mart_customer_revenue)",
-        "read_sql(node=mart_supplier_performance)",
+        "status(node=mart_supplier_performance)",
         "read_sql(node=rpt_regional_summary)",
-        "read_sql(node=int_order_items)",
-        "read_sql(node=mart_customer_revenue)",
-        "submit_diagnosis(fix_target=rpt_regional_summary, sql=select m.region,\n       count(*) )"
+        "read_sql(node=mart_supplier_performance)"
       ],
-      "result": "did not fix it"
+      "result": "no fix submitted"
     },
     {
       "id": "bad_join_key.order_without_line",
@@ -192,31 +173,25 @@
       "edited": "mart_supplier_performance",
       "symptom": "margin_rate in rpt_regional_summary looks wrong",
       "checks_see_it": false,
-      "submitted": true,
-      "node": "mart_supplier_performance",
-      "sql": "select\n    s.supplier_id,\n    s.supplier_name,\n    sum(i.net_revenue) as revenue,\n    sum(coalesce(c.supply_cost, 0)) as cost,\n    sum(i.net_revenue - coalesce(c.supply_cost, 0)) as margin\nfrom stg_supplier s\njoin int_order_items i on i.supplier_id = s.supplier_id\nleft join int_part_cost c on c.order_id = i.order_id and c.line_no = i.line_no\ngroup by s.supplier_id, s.supplier_name",
-      "reason": "The join to int_part_cost missed the line_no, causing cost to be duplicated for multi\u2011line orders and inflating margin, which made margin_rate in rpt_regional_summary incorrect.",
-      "said_instead": null,
+      "submitted": false,
+      "node": null,
+      "sql": null,
+      "reason": "",
+      "said_instead": "I\u2019m unable to determine which upstream procedure is producing the wrong\u202f`margin_rate` value in\u202f`rpt_regional_summary` based on the information available. The report\u2019s SQL references only the two mart tables, and without a clear relationship between supplier performance and region I can\u2019t pinpoint a specific node to fix. This incident should be escalated for further investigation.",
       "evidence": "unverified",
-      "functional": true,
-      "integrity": true,
-      "kept": true,
-      "still_wrong": [],
-      "changed_outside_approval": [],
-      "tool_calls": 10,
+      "functional": false,
+      "integrity": false,
+      "kept": false,
+      "still_wrong": null,
+      "changed_outside_approval": null,
+      "tool_calls": 4,
       "calls": [
-        "status(node=bad_join_key.order_without_line) -> ERROR: 'bad_join_key.order_without_line' is not in this pipeline. Call pipeline to see the nodes.",
         "pipeline()",
-        "status(node=mart_customer_revenue)",
-        "status(node=mart_supplier_performance)",
-        "read_sql(node=rpt_regional_summary)",
+        "read_sql(node=mart_customer_revenue)",
         "read_sql(node=mart_supplier_performance)",
-        "read_sql(node=int_order_items)",
-        "read_sql(node=int_part_cost)",
-        "profile(node=mart_customer_revenue)",
-        "submit_diagnosis(fix_target=mart_supplier_performance, sql=select\n    s.supplier_id,\n  )"
+        "read_sql(node=rpt_regional_summary)"
       ],
-      "result": "fixed"
+      "result": "no fix submitted"
     },
     {
       "id": "date_window.latest_day_excluded",
@@ -225,30 +200,26 @@
       "symptom": "latest_day, trailing_7d_revenue in rpt_revenue_dashboard look wrong",
       "checks_see_it": true,
       "submitted": true,
-      "node": "rpt_revenue_dashboard",
-      "sql": "select\n  m.region,\n  m.segment,\n  sum(m.revenue) as revenue,\n  sum(m.orders) as orders,\n  (select max(order_date) - interval '1 day' from mart_daily_revenue) as latest_day,\n  (select sum(revenue)\n     from mart_daily_revenue\n     where order_date > (select max(order_date) - interval '7 day' from mart_daily_revenue)\n       and order_date < (select max(order_date) from mart_daily_revenue)\n   ) as trailing_7d_revenue\nfrom mart_customer_revenue m\ngroup by m.region, m.segment",
-      "reason": "The report should exclude the most recent day from the trailing 7\u2011day window. The original SQL used the latest day for both latest_day and included it in the 7\u2011day sum, causing wrong values. Adjusted latest_day to be the day before the max date and limited the trailing sum to dates strictly before the max date.",
+      "node": "mart_daily_revenue",
+      "sql": "select order_date,\n       count(distinct order_id) as orders,\n       sum(net_revenue) as revenue\nfrom int_order_items\nwhere order_date >= (select as_of from meta) - 90\n  and order_date <= (select as_of from meta)\ngroup by order_date",
+      "reason": "The original query excluded the current as_of date with '<', causing the latest_day and trailing_7d_revenue to be off. Changed to inclusive range using '>=' and '<='.",
       "said_instead": null,
-      "evidence": "contradicted",
-      "functional": false,
+      "evidence": "supported",
+      "functional": true,
       "integrity": false,
       "kept": false,
       "still_wrong": [
-        "mart_daily_revenue",
-        "rpt_revenue_dashboard"
-      ],
-      "changed_outside_approval": [
         "mart_daily_revenue"
       ],
-      "tool_calls": 5,
+      "changed_outside_approval": [],
+      "tool_calls": 4,
       "calls": [
-        "status(node=date_window.latest_day_excluded) -> ERROR: 'date_window.latest_day_excluded' is not in this pipeline. Call pipeline to see the nodes.",
-        "pipeline()",
+        "status(node=rpt_revenue_dashboard)",
+        "upstream(node=rpt_revenue_dashboard)",
         "read_sql(node=mart_daily_revenue)",
-        "read_sql(node=rpt_revenue_dashboard)",
-        "submit_diagnosis(fix_target=rpt_revenue_dashboard, sql=select\n  m.region,\n  m.segment,\n)"
+        "submit_diagnosis(fix_target=mart_daily_revenue, sql=select order_date,\n       count(dis)"
       ],
-      "result": "did not fix it"
+      "result": "report came back, warehouse still wrong"
     },
     {
       "id": "date_window.trailing_six_days",
@@ -258,8 +229,8 @@
       "checks_see_it": false,
       "submitted": true,
       "node": "rpt_revenue_dashboard",
-      "sql": "select\n    m.region,\n    m.segment,\n    sum(m.revenue) as revenue,\n    sum(m.orders) as orders,\n    (select max(order_date) from mart_daily_revenue) as latest_day,\n    (select sum(revenue)\n       from mart_daily_revenue\n       where order_date >= (select max(order_date) from mart_daily_revenue) - 6) as trailing_7d_revenue\nfrom mart_customer_revenue m\ngroup by m.region, m.segment",
-      "reason": "Trailing 7\u2011day revenue excluded the most recent day due to a '>' comparison; changed to '>=' so the last 7 days inclusive are summed.",
+      "sql": "select m.region, m.segment,\n       sum(m.revenue) as revenue,\n       sum(m.orders) as orders,\n       (select max(order_date) from mart_daily_revenue) as latest_day,\n       (select sum(revenue)\n          from mart_daily_revenue\n         where order_date >= (select max(order_date) from mart_daily_revenue) - 6) as trailing_7d_revenue\n  from mart_customer_revenue m\n group by m.region, m.segment",
+      "reason": "The trailing 7\u2011day revenue excluded the most recent day due to a strict '>' filter. Changed to '>=' so the last 7 days (including the latest day) are summed.",
       "said_instead": null,
       "evidence": "unverified",
       "functional": true,
@@ -272,8 +243,8 @@
         "pipeline()",
         "read_sql(node=mart_daily_revenue)",
         "read_sql(node=rpt_revenue_dashboard)",
-        "submit_diagnosis(fix_target=rpt_revenue_dashboard, sql=select \n    m.region,\n    m.segm) -> ERROR: this SQL does not run: Binder Error: Referenced table \"d\" not found!",
-        "submit_diagnosis(fix_target=rpt_revenue_dashboard, sql=select\n    m.region,\n    m.segme)"
+        "read_sql(node=mart_customer_revenue)",
+        "submit_diagnosis(fix_target=rpt_revenue_dashboard, sql=select m.region, m.segment,\n    )"
       ],
       "result": "fixed"
     },
@@ -286,7 +257,7 @@
       "submitted": true,
       "node": "int_customer_geo",
       "sql": "select c.customer_id,\n       c.segment,\n       coalesce(n.n_name, 'UNASSIGNED') as nation,\n       coalesce(r.r_name, 'UNASSIGNED') as region\nfrom stg_customer c\nleft join raw.nation n on n.n_nationkey = c.nation_id\nleft join raw.region r on r.r_regionkey = n.n_regionkey",
-      "reason": "The original inner join to raw.nation dropped customers without a matching nation, causing 30 rows missing downstream. Changed to left join to preserve all customers.",
+      "reason": "Used inner join to nation, dropping customers with missing nation_id, causing row loss upstream. Changed to left join to retain all customers.",
       "said_instead": null,
       "evidence": "supported",
       "functional": true,
@@ -294,13 +265,16 @@
       "kept": true,
       "still_wrong": [],
       "changed_outside_approval": [],
-      "tool_calls": 6,
+      "tool_calls": 9,
       "calls": [
         "pipeline()",
-        "profile(node=mart_daily_revenue)",
-        "profile(node=mart_customer_revenue)",
-        "upstream(node=rpt_revenue_dashboard)",
+        "status(node=mart_daily_revenue)",
+        "status(node=mart_customer_revenue)",
+        "read_sql(node=mart_daily_revenue)",
+        "read_sql(node=rpt_revenue_dashboard)",
+        "read_sql(node=mart_customer_revenue)",
         "read_sql(node=int_customer_geo)",
+        "status(node=int_customer_geo)",
         "submit_diagnosis(fix_target=int_customer_geo, sql=select c.customer_id,\n       c.segmen)"
       ],
       "result": "fixed"
@@ -311,33 +285,28 @@
       "edited": "mart_supplier_performance",
       "symptom": "margin_rate in rpt_regional_summary looks wrong",
       "checks_see_it": false,
-      "submitted": true,
-      "node": "rpt_regional_summary",
-      "sql": "with revenue_by_region as (\n    select \n        m.region,\n        count(*) as customers,\n        sum(m.revenue) as revenue,\n        sum(m.revenue) / (select sum(revenue) from mart_customer_revenue) as revenue_share\n    from mart_customer_revenue m\n    group by m.region\n),\ncost_by_region as (\n    select \n        g.region,\n        sum(pc.supply_cost) as cost\n    from int_order_items i\n    join int_part_cost pc on pc.order_id = i.order_id and pc.line_no = i.line_no\n    join int_customer_geo g on g.customer_id = i.customer_id\n    group by g.region\n)\nselect \n    r.region,\n    r.customers,\n    r.revenue,\n    r.revenue_share,\n    (r.revenue - coalesce(c.cost, 0)) / r.revenue as margin_rate\nfrom revenue_by_region r\nleft join cost_by_region c on c.region = r.region",
-      "reason": "margin_rate was calculated using overall supplier performance, not region\u2011specific cost. Re\u2011computed margin_rate per region by joining order items, part cost, and customer geography.",
-      "said_instead": null,
+      "submitted": false,
+      "node": null,
+      "sql": null,
+      "reason": "",
+      "said_instead": "I\u2019m unable to determine definitively which procedure\u2019s SQL is causing the incorrect\u202f`margin_rate`\u202fin\u202f`rpt_regional_summary` with the information available. The report\u2019s query itself looks syntactically correct, and the upstream nodes all report as healthy. Determining the proper fix would require additional context about how\u202f`margin_rate`\u202fshould be calculated per region. I recommend a human data\u2011engineer review the intended business logic for\u202f`margin_rate`\u202fand the relationships between suppliers, customers, and regions.",
       "evidence": "unverified",
       "functional": false,
       "integrity": false,
       "kept": false,
-      "still_wrong": [
-        "mart_supplier_performance",
-        "rpt_regional_summary"
-      ],
-      "changed_outside_approval": [
-        "mart_supplier_performance"
-      ],
+      "still_wrong": null,
+      "changed_outside_approval": null,
       "tool_calls": 7,
       "calls": [
-        "upstream(node=rpt_regional_summary)",
-        "read_sql(node=int_part_cost)",
+        "pipeline()",
+        "status(node=rpt_regional_summary)",
+        "status(node=mart_customer_revenue)",
+        "upstream(node=mart_supplier_performance)",
+        "read_sql(node=mart_supplier_performance)",
         "read_sql(node=rpt_regional_summary)",
-        "profile(node=mart_supplier_performance)",
-        "read_sql(node=mart_customer_revenue)",
-        "read_sql(node=int_order_items)",
-        "submit_diagnosis(fix_target=rpt_regional_summary, sql=with revenue_by_region as (\n    s)"
+        "read_sql(node=mart_customer_revenue)"
       ],
-      "result": "did not fix it"
+      "result": "no fix submitted"
     },
     {
       "id": "changed_grain.one_row_per_order",
@@ -346,32 +315,26 @@
       "symptom": "revenue in rpt_revenue_dashboard looks wrong",
       "checks_see_it": true,
       "submitted": true,
-      "node": "mart_customer_revenue",
-      "sql": "select g.customer_id,\n       g.region,\n       g.segment,\n       coalesce(i.revenue, 0) as revenue,\n       coalesce(i.orders, 0) as orders\nfrom int_customer_geo g\nleft join (\n    select customer_id,\n           sum(net_revenue) as revenue,\n           count(distinct order_id) as orders\n    from int_order_items\n    group by customer_id\n) i on i.customer_id = g.customer_id",
-      "reason": "The original query joined int_customer_geo (which can have multiple rows per customer) directly to int_order_items, causing revenue to be double\u2011counted and resulting in wrong row counts. Aggregating int_order_items per customer before the join fixes the duplication while preserving all columns.",
+      "node": "int_customer_geo",
+      "sql": "select c.customer_id,\n       c.segment,\n       coalesce(n.n_name, 'UNASSIGNED') as nation,\n       coalesce(r.r_name, 'UNASSIGNED') as region\nfrom stg_customer c\nleft join raw.nation n on n.n_nationkey = c.nation_id\nleft join raw.region r on r.r_regionkey = n.n_regionkey",
+      "reason": "Removed unnecessary join to stg_orders which caused duplicate rows per customer, leading to inflated row counts in int_customer_geo and downstream mart_customer_revenue.",
       "said_instead": null,
-      "evidence": "contradicted",
-      "functional": false,
-      "integrity": false,
-      "kept": false,
-      "still_wrong": [
-        "int_customer_geo",
-        "mart_customer_revenue",
-        "rpt_revenue_dashboard",
-        "rpt_regional_summary"
-      ],
-      "changed_outside_approval": [
-        "int_customer_geo"
-      ],
-      "tool_calls": 5,
+      "evidence": "supported",
+      "functional": true,
+      "integrity": true,
+      "kept": true,
+      "still_wrong": [],
+      "changed_outside_approval": [],
+      "tool_calls": 6,
       "calls": [
         "pipeline()",
         "status(node=mart_daily_revenue)",
         "status(node=mart_customer_revenue)",
-        "read_sql(node=mart_customer_revenue)",
-        "submit_diagnosis(fix_target=mart_customer_revenue, sql=select g.customer_id,\n       g.r)"
+        "status(node=int_customer_geo)",
+        "read_sql(node=int_customer_geo)",
+        "submit_diagnosis(fix_target=int_customer_geo, sql=select c.customer_id,\n       c.segmen)"
       ],
-      "result": "did not fix it"
+      "result": "fixed"
     },
     {
       "id": "changed_grain.one_row_per_month",
@@ -382,7 +345,7 @@
       "submitted": true,
       "node": "mart_customer_revenue",
       "sql": "select\n    g.customer_id,\n    g.region,\n    g.segment,\n    coalesce(sum(i.net_revenue), 0) as revenue,\n    count(distinct i.order_id) as orders\nfrom int_customer_geo g\nleft join int_order_items i on i.customer_id = g.customer_id\ngroup by g.customer_id, g.region, g.segment",
-      "reason": "The original query grouped by month (date_trunc('month', i.order_date)) without selecting it, causing multiple rows per customer and violating the unique customer_id key. Removing the month grouping yields one row per customer as expected.",
+      "reason": "The original query grouped by month (date_trunc('month', i.order_date)) which caused multiple rows per customer, breaking uniqueness expected by downstream reports. Removed the month grouping to produce a single row per customer.",
       "said_instead": null,
       "evidence": "supported",
       "functional": true,
@@ -390,8 +353,9 @@
       "kept": true,
       "still_wrong": [],
       "changed_outside_approval": [],
-      "tool_calls": 4,
+      "tool_calls": 5,
       "calls": [
+        "pipeline()",
         "status(node=rpt_regional_summary)",
         "upstream(node=rpt_regional_summary)",
         "read_sql(node=mart_customer_revenue)",
@@ -404,42 +368,42 @@
     "evolve": {
       "incidents": 4,
       "fixed": 0,
-      "report came back, warehouse still wrong": 0,
-      "did not fix it": 4,
-      "no fix submitted": 0,
+      "report came back, warehouse still wrong": 1,
+      "did not fix it": 1,
+      "no fix submitted": 2,
       "verified in rehearsal, never submitted": 0,
       "model unavailable": 0,
-      "functional": 0,
+      "functional": 1,
       "integrity": 0
     },
     "checks see it": {
       "incidents": 9,
-      "fixed": 2,
-      "report came back, warehouse still wrong": 0,
-      "did not fix it": 7,
-      "no fix submitted": 0,
+      "fixed": 4,
+      "report came back, warehouse still wrong": 1,
+      "did not fix it": 2,
+      "no fix submitted": 2,
       "verified in rehearsal, never submitted": 0,
       "model unavailable": 0,
-      "functional": 2,
-      "integrity": 2
+      "functional": 5,
+      "integrity": 4
     },
     "all": {
       "incidents": 12,
-      "fixed": 4,
-      "report came back, warehouse still wrong": 0,
-      "did not fix it": 8,
-      "no fix submitted": 0,
+      "fixed": 5,
+      "report came back, warehouse still wrong": 1,
+      "did not fix it": 2,
+      "no fix submitted": 4,
       "verified in rehearsal, never submitted": 0,
       "model unavailable": 0,
-      "functional": 4,
-      "integrity": 4
+      "functional": 6,
+      "integrity": 5
     },
     "held_in": {
       "incidents": 4,
       "fixed": 2,
       "report came back, warehouse still wrong": 0,
-      "did not fix it": 2,
-      "no fix submitted": 0,
+      "did not fix it": 1,
+      "no fix submitted": 1,
       "verified in rehearsal, never submitted": 0,
       "model unavailable": 0,
       "functional": 2,
@@ -447,25 +411,25 @@
     },
     "no check sees it": {
       "incidents": 3,
-      "fixed": 2,
+      "fixed": 1,
       "report came back, warehouse still wrong": 0,
-      "did not fix it": 1,
-      "no fix submitted": 0,
+      "did not fix it": 0,
+      "no fix submitted": 2,
       "verified in rehearsal, never submitted": 0,
       "model unavailable": 0,
-      "functional": 2,
-      "integrity": 2
+      "functional": 1,
+      "integrity": 1
     },
     "ood": {
       "incidents": 4,
-      "fixed": 2,
+      "fixed": 3,
       "report came back, warehouse still wrong": 0,
-      "did not fix it": 2,
-      "no fix submitted": 0,
+      "did not fix it": 0,
+      "no fix submitted": 1,
       "verified in rehearsal, never submitted": 0,
       "model unavailable": 0,
-      "functional": 2,
-      "integrity": 2
+      "functional": 3,
+      "integrity": 3
     }
   }
 }

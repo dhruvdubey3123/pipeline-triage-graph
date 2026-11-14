@@ -17,6 +17,8 @@ jobs:
         run: python -m evals.run_eval --data evals/data/incidents_noisy.jsonl --out evals/results_noisy.json --thresholds evals/thresholds_noisy.yaml --gate
       - name: Warehouse eval (real SQL, real breaks; fails if the committed results would change)
         run: python -m evals.warehouse_eval --check
+      - name: Open-world cases (generated faults, bad source data, mistaken complaints; fails if the list would change)
+        run: python -m evals.world_eval --check
       - uses: actions/upload-artifact@v4
         with: {name: eval-results, path: "evals/results*.json"}
   docker:

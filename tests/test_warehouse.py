@@ -138,6 +138,12 @@ def test_the_committed_manifest_and_results_are_what_the_code_produces():
 
 # ---------------------------------------------------------------- the investigator on the warehouse
 
+def _which(messages) -> str:
+    """The test doubles below know the answers, so they need to know which break they are on. The model
+    is only ever shown a number (INC-003), so they count: the evals run the breaks in order."""
+    return BREAKS[int(messages[1]["content"].split(":")[0].removeprefix("Incident INC-")) - 1].id
+
+
 class Scripted:
     """A chat model that makes the calls it is given, in order, then answers in plain text."""
     model = "scripted"
@@ -227,7 +233,7 @@ def test_scoring_a_model_run_counts_what_todays_cross_check_would_hold_back():
         def chat(self, messages, tools):
             if any(m["role"] == "tool" for m in messages):
                 return {"content": "done"}
-            inc = messages[1]["content"].split(":")[0].removeprefix("Incident ")
+            inc = _which(messages)
             return {"tool_calls": [{"id": "c", "function": {"name": "submit_diagnosis", "arguments": json.dumps(
                 {"fix_target": answers[inc], "reason": "read the SQL"})}}]}
 
@@ -361,7 +367,7 @@ def test_scoring_a_fix_run_keeps_the_two_answers_apart():
         def chat(self, messages, tools):
             if any(m["role"] == "tool" for m in messages):
                 return {"content": "done"}
-            node, sql = reference[messages[1]["content"].split(":")[0].removeprefix("Incident ")]
+            node, sql = reference[_which(messages)]
             return {"tool_calls": [{"id": "c", "function": {"name": "submit_diagnosis", "arguments": json.dumps(
                 {"fix_target": node, "sql": sql, "reason": "restored"})}}]}
 
@@ -464,7 +470,7 @@ def test_a_model_that_uses_the_checker_well_fixes_all_twelve_on_the_first_try():
         model = "careful"
 
         def chat(self, messages, tools):
-            node, sql = reference[messages[1]["content"].split(":")[0].removeprefix("Incident ")]
+            node, sql = reference[_which(messages)]
             done = sum(m["role"] == "tool" for m in messages)
             plan = [("where_checks_fail", {}), ("check_node", {"node": node}), ("try_fix", {"fix_target": node, "sql": sql}),
                     ("submit_diagnosis", {"fix_target": node, "sql": sql, "reason": "restored"})]
@@ -519,7 +525,7 @@ def test_a_model_that_could_not_be_reached_is_not_counted_as_a_model_that_failed
 
 def test_the_saved_fix_runs_are_labelled_under_the_current_rules():
     runs = sorted((warehouse_eval.ROOT / "evals/runs").glob("*.json"))
-    assert len(runs) == 3
+    assert len(runs) == 5                       # three early runs, and the pair that was run with ids visible
     for path in (warehouse_eval.FIX_RESULTS, warehouse_eval.CHECKED_FIX_RESULTS, *runs):
         saved = json.loads(path.read_text())
         assert saved["host"] in ("openrouter.ai", "api.groq.com")
@@ -532,6 +538,22 @@ def test_the_reported_comparison_is_one_model_on_one_host():
     checked = json.loads(warehouse_eval.CHECKED_FIX_RESULTS.read_text())
     assert (alone["model"], alone["host"]) == (checked["model"], checked["host"])
     a, c = alone["summary"]["all"], checked["summary"]["all"]
-    assert (a["fixed"], a["did not fix it"]) == (4, 8) and (c["fixed"], c["no fix submitted"]) == (9, 3)
+    assert alone["ids_hidden_from_model"] and checked["ids_hidden_from_model"]
+    assert (a["fixed"], a["did not fix it"] + a["report came back, warehouse still wrong"], a["no fix submitted"]) == (5, 3, 4)
+    assert (c["fixed"], c["no fix submitted"]) == (10, 2)
     assert c["did not fix it"] == 0 and c["report came back, warehouse still wrong"] == 0
     assert all(r["kept"] == (r["functional"] and r["integrity"]) for r in alone["rows"] + checked["rows"])
+
+
+def test_the_saved_open_world_run_adds_up():
+    from evals import world_eval
+    from triage.warehouse.world import RIGHT
+    saved = json.loads(world_eval.RESULTS.read_text())
+    assert saved["summary"] == world_eval.summarise(saved["rows"]) and len(saved["rows"]) == 38
+    assert all(r["right"] == (r["result"] == RIGHT[r["kind"]]) for r in saved["rows"])
+    s = saved["summary"]
+    assert (s["sql"]["right"], s["source"]["right"], s["none"]["right"]) == (21, 4, 1)
+    wrong = [r["result"] for r in saved["rows"] if r["result"] not in (*RIGHT.values(), "handed to a person")]
+    assert wrong == ["blamed a source", "blamed a source"]          # the only endings that were wrong and not a handoff
+    assert not any(k in json.dumps([r["calls"], r["said_instead"], r["closed"]]) for r in saved["rows"]
+                   for k in ("gen_", "source.", "mistaken_"))     # written before the file carried a marker: the ids were hidden

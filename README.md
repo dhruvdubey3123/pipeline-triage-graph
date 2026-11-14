@@ -312,41 +312,45 @@ python -m evals.warehouse_eval --fixer --checker   # writes evals/warehouse_fix_
 
 ### Measured: the model alone against the model with the checker
 
-GPT-OSS 120B served through OpenRouter, the same 12 incidents, one run of each arm
+GPT-OSS 120B served through OpenRouter, the same 12 incidents, one run of each arm on 13 Nov 2026
 (`evals/warehouse_fix_results_llm.json` and `evals/warehouse_fix_checked_results_llm.json`, with every tool call, every
-refusal and the SQL the model wrote).
+refusal and the SQL the model wrote). The model is shown an incident number and never the break's id.
 
 | 12 incidents | Model alone | With the checker |
 |---|---|---|
-| **Fixed and verified**: report and whole warehouse right, one procedure changed | **4** | **9** |
-| A fix that was not one, applied and rolled back | 8 | **0** |
-| No verified fix, handed to a person | 0 | 3 |
-| Fixed, where health checks see the break (9) | 2 | 8 |
-| Fixed, where no check sees it (3) | 2 | 1 |
+| **Fixed and verified**: report and whole warehouse right, one procedure changed | **5** | **10** |
+| A fix that was not one, applied and rolled back | 3 | **0** |
+| No verified fix, handed to a person | 4 | 2 |
+| Fixed, where health checks see the break (9) | 4 | **9** |
+| Fixed, where no check sees it (3) | 1 | 1 |
 
-- **Alone, the model never declined.** Twelve submissions, eight of them wrong, most of them a patch to a node downstream
-  of the cause: a NULL in place of a dropped column, a division by 100 to explain prices that had lost their cents.
-- **With the checker it was never wrong.** All nine fixes passed their first rehearsal. The three it could not fix used
-  their three tries and stopped.
+- **Alone, three of its eight fixes were wrong.** A date filter added to a mart to explain prices that had lost their
+  cents, a constant `'UNKNOWN'` in place of a dropped column, a date window widened at both ends. All three patched
+  somewhere other than the cause or more than the cause, and all three were rolled back.
+- **With the checker it was never wrong.** Nine of the ten fixes passed their first rehearsal, one its second.
 - **Finding the node is what the checker buys.** Asked where the checks first fail, the model went to the right procedure
-  on all nine check-visible breaks.
-- **The harness still had to refuse.** Three times the model proposed a fix for a node it had not checked, and once it tried
-  a fourth rehearsal. It had been told the order every time.
-- **Five of the nine fixes were never formally submitted.** The model rehearsed the fix, saw it verified, and wrote
-  "Submitted" in prose. The rehearsal is the gate, so the harness takes the verified fix.
+  on all nine check-visible breaks. Alone it reached four.
+- **The harness still had to refuse.** Three times the model proposed a fix for a node it had not checked. It had been
+  told the order every time.
+- **Two of the ten fixes were never formally submitted.** The model rehearsed the fix, saw it verified, and wrote
+  "Submitted Diagnosis" in prose. The rehearsal is the gate, so the harness takes the verified fix.
 
-**Where the checker arm is worse, and why it is not fixed yet.** On the join that lost its line number, a break no check
-can see, the model alone found and fixed it. With the checker it rehearsed three rewrites of the report and ran out: a cheap
-experiment was available, so it tried its first idea three times and did not read further. The other break it missed the
-same way has the same shape. Both sit in the held-out splits, so changing the prompt or the tools to fix them would be
-tuning on the test. The honest route is more value-only breaks in the tunable split, and that is the next piece of work.
+**Where the checker does not help.** Three breaks trip no health check. Each arm fixed one, the same one: the trailing
+total that sums six days. On the other two the checker arm spent its three rehearsals rewriting the report and stopped;
+alone, the model declined. Both of those sit in the held-out splits, so changing the prompt or the tools to fix them
+would be tuning on the test.
 
-**How far this goes.** Twelve incidents, one run per arm: counts, not rates. Runs vary: the model alone fixed 4 of 12 on
-both hosts, but not the same four. The excluded-day break was fixed in one checker run and not in the next. The
-harness was changed between runs in response to what the runs showed (below), so the final numbers are in-sample for those
-changes.
+**How far this goes.** Twelve incidents, one run per arm: counts, not rates. The harness was changed between earlier
+runs in response to what they showed (below), so these numbers are in-sample for those changes.
 
-**What earlier runs changed.** Kept in `evals/runs/`, relabelled under the current rules:
+**An earlier pair of runs is not comparable, and why.** Until 13 Nov 2026 the task text began with the break's id, for
+example `date_window.trailing_six_days`. The ids say what kind of fault it is, though never which table. That pair
+scored 4 and 9 (`evals/runs/openrouter_*_ids_visible.json`). The pair above, with ids hidden, scored 5 and 10. With one
+run each, the difference cannot be put down to the ids or to run-to-run variation; what can be said is that hiding them
+did not lower the counts. The diagnosis-only run further up (6 of 12, on Groq) was made with ids visible and has not been
+repeated. A test now fails if an id, a kind or a label reaches the model.
+
+**What earlier runs changed.** Kept in `evals/runs/`, relabelled under the current rules. All were run with ids visible:
 
 | Run | What it exposed |
 |---|---|
@@ -367,6 +371,83 @@ pip install -e ".[dev]"
 python -m evals.warehouse_eval            # rebuild, break, trace, write evals/warehouse_results.json
 pytest -q tests/test_warehouse.py
 ```
+
+## When the answer is not a SQL fix
+
+The twelve breaks above all have one shape: a procedure is wrong, find it, fix it. An agent can do well on that by
+always proposing a fix. Real on-call work is not like that, so there is a second set of cases
+(`triage/warehouse/world.py`, 38 of them) where three different things can be true:
+
+| Kind | Cases | What happened | The right answer |
+|---|---|---|---|
+| `sql` | 29 | one generated edit to one procedure | a fix that verifies |
+| `source` | 5 | every procedure is correct; a source table arrived bad | no SQL change, and the name of the table |
+| `none` | 4 | nothing is wrong; the person is mistaken | say so, change nothing |
+
+**Generated faults** (`mutants.py`). Rules make one small edit of a kind people really merge, at every place it applies
+in every procedure: a boundary moved by one, a left join turned inner, a join condition or a default dropped, a sum
+turned into an average. A mutant is kept only if it changes a report. 40 candidates, 29 real incidents, 19 of them
+silent. Two kinds are held out whole. They are few and uneven (13 are aggregate swaps), which the counts will show.
+
+**Bad source data** (`sourcefaults.py`). A batch loaded twice, three days of line items not arrived, a column the
+source stopped filling, a fifth of the suppliers missing, a price arriving in cents. The model gets `check_sources`,
+the same shape checks as for a node, on the tables the pipeline reads. Four of the five show there. The price in cents
+does not: same rows, keys, nulls and dates.
+
+**A way to end without a fix.** `close_without_fix` takes `source_data` and a table, or `nothing_wrong`. The harness
+refuses it until the model has read both sets of checks. A fix that dedupes a double-loaded table in SQL does verify,
+and it is counted as `worked around bad data in SQL`, not as right: it hides the problem from the source's owner.
+
+**The deploy history, as its own arm.** `recent_changes` shows what was deployed since the last good run, as a diff.
+It was withheld until now because it makes a SQL fault close to trivial. A real agent would have it, so it is offered
+with `--history` and saved to a separate file. Where it cannot help is the point: with bad data or a mistaken complaint
+the history is empty.
+
+```
+python -m evals.world_eval                          # write the case list, no model
+python -m evals.world_eval --model --sample 12      # a spread of cases, cheap
+python -m evals.world_eval --model                  # all 38
+python -m evals.world_eval --model --history        # the same, with the deploy history
+python -m evals.warehouse_eval --fixer --checker --history     # the original twelve, with the deploy history
+```
+
+Results are counted per kind and never averaged across kinds. The expectation to hold them to: an agent that always
+proposes a fix scores 0 of 9 on the last two kinds.
+
+**All 38, one run** (GPT-OSS 120B via OpenRouter, 13 Nov 2026, ids hidden, without the deploy history;
+`evals/world_results_llm.json`).
+
+| Kind | Right | The rest |
+|---|---|---|
+| `sql` (29) | **21** fixed | 6 handed to a person, 2 closed as a bad source when the SQL was at fault |
+| `source` (5) | **4** named the bad table | 1 handed to a person: the price in cents |
+| `none` (4) | **1** said nothing was wrong | 3 handed to a person |
+
+- **No wrong fix was applied in 38 cases, and no correct procedure was rewritten.** Six rehearsals were refused because
+  the SQL changed no table.
+- **Two endings were wrong.** Both are SQL faults the model could not fix in its tries and then blamed on a source
+  table, although the source checks it had just read said that table was fine. The harness accepted the closure. That is
+  a gap: a closure that names a source the checks do not flag is unsupported, and should go to a person as a suspicion
+  and not as an ending. Not changed yet, so the count above is what the current code does.
+- **Where the checks see the fault it fixed 18 of 21; where they do not, 3 of 8.** The same line as on the twelve.
+- **By split:** tunable 6 of 9, held in 4 of 5, kinds held out whole 11 of 15. Twenty of the 21 fixes passed their first
+  rehearsal.
+- **It rarely says "nothing is wrong".** On three of four mistaken complaints it tried fixes, was refused or failed, and
+  ended unsure. Handing off is safe and it is not the right answer.
+- **The price in cents ends honestly:** every check passes, the model is unsure, a person gets it.
+- **The harness refused 32 calls across 23 of the 38 cases**, mostly a fix proposed before the table was checked.
+- **Ten of the 26 right endings came only after the reminder to use a tool.** The model had written its answer as text.
+
+What to hold against these numbers. One run. They are in-sample for three changes made after a first sample of 12: the
+"changes no table" rule, the instructions naming the source tables, and the reminder. That first sample
+(`evals/runs/world/sample12_ids_visible.json`) was run with case ids in the task text, and the model read answers off
+them, most plainly for the price in cents; its counts are not used. The results file for the run above was written before
+the writer added an `ids_hidden_from_model` marker; the ids were hidden at that commit (`8270fc8`), and a test checks the
+file contains none. Twenty-nine generated faults is a small set and 13 of them are aggregate swaps. The deploy-history
+arm has not been run.
+
+`world.schedule` deals the same cases out one night at a time, with quiet nights between, for the chat in the harness
+repo.
 
 ## Running inside the agent harness
 

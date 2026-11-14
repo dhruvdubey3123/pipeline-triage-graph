@@ -28,6 +28,11 @@ from .pipeline import BY_ID, NODES, REPORTS
 
 DEFAULT_AS_OF = dt.date(2026, 11, 9)
 RAW = ("lineitem", "orders", "customer", "supplier", "partsupp", "nation", "region")
+SOURCE_KEYS = {  # table -> (the columns that identify one row, a date column that says how current it is)
+    "lineitem": (("l_orderkey", "l_linenumber"), "l_shipdate"), "orders": (("o_orderkey",), "o_orderdate"),
+    "customer": (("c_custkey",), None), "supplier": (("s_suppkey",), None),
+    "partsupp": (("ps_partkey", "ps_suppkey"), None), "nation": (("n_nationkey",), None), "region": (("r_regionkey",), None),
+}
 
 
 def _load_tpch(db: duckdb.DuckDBPyConnection) -> None:
@@ -87,10 +92,38 @@ class Warehouse:
     def sql(self, node: str) -> str:
         return self.db.execute("select sql from procedures where node = ?", [node]).fetchone()[0]
 
-    def set_sql(self, node: str, sql: str) -> None:
+    def set_sql(self, node: str, sql: str, record: bool = True) -> None:
+        """Deploy a definition. A deploy is written to the history a person on call could read, the way
+        a merge is; a rehearsal passes record=False, because it never reaches the real warehouse."""
         if node not in BY_ID:
             raise KeyError(node)
+        before = self.sql(node)
         self.db.execute("update procedures set sql = ? where node = ?", [sql, node])
+        if record and before != sql:
+            self.db.execute("create table if not exists deploys (seq integer, cycle integer, node text, before text, after text)")
+            self.db.execute("insert into deploys select coalesce(max(seq), 0) + 1, ?, ?, ?, ? from deploys",
+                            [self.cycle, node, before, sql])
+
+    def mark_good(self) -> None:
+        """Everything is right as of now. `deploys_since_good` starts counting from here."""
+        self.db.execute("create table if not exists good_run (cycle integer)")
+        self.db.execute("delete from good_run")
+        self.db.execute("insert into good_run values (?)", [self.cycle])
+
+    def deploys_since_good(self) -> list[dict]:
+        try:
+            row = self.db.execute("select cycle from good_run").fetchone()
+        except duckdb.Error:
+            row = None
+        return self.deploys(row[0] if row else 1)
+
+    def deploys(self, since_cycle: int = 1) -> list[dict]:
+        """Definitions deployed at or after a cycle, oldest first."""
+        if not self.db.execute("select 1 from information_schema.tables where table_name = 'deploys'").fetchone():
+            return []
+        rows = self.db.execute("select seq, cycle, node, before, after from deploys where cycle >= ? order by seq",
+                               [since_cycle]).fetchall()
+        return [dict(zip(("seq", "cycle", "node", "before", "after"), r)) for r in rows]
 
     def changed_procedures(self) -> list[str]:
         """Procedures whose SQL is not the reference SQL: what a fix, or a break, touched."""
@@ -116,7 +149,54 @@ class Warehouse:
                 continue
             result[n.id] = "success"
             self._log(n.id, "success", None, self.stats(n.id))
+        self.db.execute("create table if not exists source_log (cycle integer, source text, stats text)")
+        self.db.executemany("insert into source_log values (?, ?, ?)",
+                            [(self.cycle, t, json.dumps(self.source_stats(t))) for t in RAW])
         return result
+
+    # ------------------------------------------------------------------ the source tables
+
+    def source_stats(self, table: str) -> dict:
+        """The same kind of check as `stats`, for a table the pipeline reads and does not build."""
+        key, date_col = SOURCE_KEYS[table]
+        cols = [c[0] for c in self.db.execute(f"describe raw.{table}").fetchall()]
+        rows = self.db.execute(f"select count(*) from raw.{table}").fetchone()[0]
+        counts = self.db.execute("select " + ", ".join(f'count("{c}")' for c in cols) + f" from raw.{table}").fetchone()
+        dup = rows - self.db.execute(f"select count(*) from (select distinct {', '.join(key)} from raw.{table})").fetchone()[0]
+        latest = self.db.execute(f"select max({date_col}) from raw.{table}").fetchone()[0] if date_col else None
+        return {"rows": rows, "nulls": {c: round(1 - k / rows, 6) for c, k in zip(cols, counts)} if rows else {},
+                "duplicate_keys": dup, "latest": str(latest) if latest is not None else None}
+
+    def source_run(self, table: str, cycle: int | None = None) -> dict | None:
+        try:
+            row = self.db.execute("select stats from source_log where source = ? and cycle = ?",
+                                  [table, cycle or self.cycle]).fetchone()
+        except duckdb.Error:
+            return None
+        return json.loads(row[0]) if row else None
+
+    def corrupt_source(self, table: str, statements: tuple[str, ...]) -> None:
+        """Something upstream of the warehouse went wrong. A clean copy is kept, because the only fix
+        for bad source data is the owner of the source reloading it."""
+        self.db.execute("create schema if not exists clean")
+        self.db.execute(f"create table if not exists clean.{table} as select * from raw.{table}")
+        for s in statements:
+            self.db.execute(s)
+
+    def reload_sources(self, only: str | None = None) -> list[str]:
+        """The source owner reloads what was bad, or the one table they were asked about. -> the
+        tables that were reloaded. Asking for a table that was fine reloads nothing."""
+        back = [r[0] for r in self.db.execute(
+            "select table_name from information_schema.tables where table_schema = 'clean'").fetchall()
+                if only is None or r[0] == only]
+        for t in back:
+            self.db.execute(f"create or replace table raw.{t} as select * from clean.{t}")
+            self.db.execute(f"drop table clean.{t}")
+        return back
+
+    def corrupted_sources(self) -> list[str]:
+        return [r[0] for r in self.db.execute(
+            "select table_name from information_schema.tables where table_schema = 'clean' order by 1").fetchall()]
 
     def _log(self, node: str, status: str, error: str | None, stats: dict | None) -> None:
         self.db.execute("insert into run_log values (?, ?, ?, ?, ?)",

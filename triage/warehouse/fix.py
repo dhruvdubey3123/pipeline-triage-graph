@@ -21,17 +21,23 @@ would pass.
 """
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass, field
 
 import duckdb
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .. import evidence
 from ..dag import PipelineDAG
 from ..investigator import TERMINAL, ChatModel, Investigation, NodeArg, ToolSpec, investigate
+from .build import RAW as RAW_TABLES
 from .build import Warehouse
 from .investigate import tools as read_tools
+from .pipeline import BY_ID as BY_NODE
+from .probe import observe_sources
 
 INSTRUCTIONS = (
     "You are on call for a data warehouse. Every node is a SQL procedure that rebuilds one table from the tables it "
@@ -43,7 +49,9 @@ INSTRUCTIONS = (
     "If you cannot find the cause, do not guess: say so in plain text and the incident goes to a person."
 )
 
-ANSWER_KEY = re.compile(r"\b(reference\s*\.|golden\b|run_log\b|procedures\b)", re.I)
+# Anything that holds the right answer, or says what was changed. Matched as whole words wherever they
+# appear, so quoting a schema name ("reference".x) does not get around it.
+ANSWER_KEY = re.compile(r"\b(reference|clean|golden|run_log|source_log|deploys|good_run|procedures|information_schema|duckdb_\w+)\b", re.I)
 
 
 class Fix(BaseModel):
@@ -139,21 +147,76 @@ class Session:
     taken_from_rehearsal: bool = False                 # the model stopped without submitting; the harness took the verified fix
     verified_on_try: int | None = None
     refusals: list = field(default_factory=list)       # reasons the harness refused a call
+    asked_sources: bool = False
+    no_ops: int = 0                                    # rehearsals of SQL that changed no table
+    asked_changes: bool = False
+    closed: dict | None = None                         # ended without a fix: {"kind", "source_table", "reason"}
 
 
 def rehearse(wh: Warehouse, node: str, sql: str, symptom_node: str) -> dict:
     """Run a fix and put everything back, whatever the result. Applying for real is a separate step
     that happens after a person approves."""
-    prior = wh.sql(node)
-    wh.set_sql(node, sql)
+    prior, before = wh.sql(node), _fingerprint(wh)
+    wh.set_sql(node, sql, record=False)
     wh.run_cycle()
     out = wh.outcome(symptom_node, allowed=(node,))
-    wh.set_sql(node, prior)
+    out["tables_changed"] = [n for n, v in _fingerprint(wh).items() if v != before[n]]
+    wh.set_sql(node, prior, record=False)
     wh.run_cycle()
     return out
 
 
-def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Session) -> list[ToolSpec]:
+def _fingerprint(wh: Warehouse) -> dict:
+    """What every table holds right now. Compared before and after a rehearsal, it says whether the
+    new SQL changed anything at all, which needs no knowledge of what the right answer is."""
+    return {n: wh.checksum(n) if wh.last_run(n)["status"] == "success" else wh.last_run(n)["status"] for n in BY_NODE}
+
+
+HISTORY_NOTE = (" You also have recent_changes: the SQL that was deployed since the last good run, as a diff. A recent "
+                "change is the first place to look, but it is not proof: check it and rehearse a fix like any other.")
+
+OPEN_INSTRUCTIONS = (
+    "You are on call for a data warehouse. Every node is a SQL procedure that rebuilds one table from the tables it "
+    "reads, and the first nodes read source tables that are loaded from outside. The source tables are the raw ones "
+    "(raw.orders, raw.lineitem, raw.customer, raw.supplier, raw.partsupp, raw.nation, raw.region). A node named stg_, "
+    "int_, mart_ or rpt_ is a procedure, never a source: if its checks fail and no raw table's do, look at its SQL. "
+    "A person says a report looks wrong. "
+    "There are three things that can be true, and you have to find out which. One: a procedure's SQL is wrong. Then "
+    "write its corrected SQL and prove it. Two: the SQL is all correct and a source table arrived bad (rows missing, "
+    "loaded twice, a column not filled, a value in the wrong unit). No SQL change is the right fix for that: the "
+    "source's owner has to reload it, and working around bad data in SQL hides it. Three: nothing is wrong and the "
+    "person is mistaken. Work in this order. Call where_checks_fail and check_sources first. If a source table is "
+    "reported bad and the damage starts where that source is read, call close_without_fix with kind source_data and "
+    "that table. If a node fails and no source does, call check_node on the node you blame, then try_fix with its "
+    f"complete replacement SELECT; you have {MAX_TRIES} tries, and submit_diagnosis takes only a fix try_fix verified. "
+    "If no check fails anywhere, read the SQL upstream of the report line by line before you conclude anything: some "
+    "faults change values and trip no check. Call close_without_fix with kind nothing_wrong only when you have read "
+    "that SQL and it is correct. Change as little as possible and keep every column. If you cannot tell, do not "
+    "guess: say so in plain text and the incident goes to a person."
+)
+NUDGE = ("You answered in text, and text ends nothing. End the incident with a tool call: submit_diagnosis with a fix "
+         "that try_fix verified, or close_without_fix. If you cannot tell what is wrong, reply with the one word UNSURE "
+         "and the incident goes to a person.")
+
+
+class Close(BaseModel):
+    kind: Literal["source_data", "nothing_wrong"] = Field(description="source_data: a source table arrived bad. nothing_wrong: the report is right")
+    source_table: str = Field("", description="for source_data, the raw table that is bad, e.g. orders")
+    reason: str = Field(description="what you found, in one or two sentences")
+
+
+CLOSE = "close_without_fix"
+
+
+def _diff(before: str, after: str) -> str:
+    split = lambda s: [x.strip() for x in re.sub(r",\s+(?![^()]*\))", ",\n", re.sub(
+        r"(?<!left)(?<!inner)\s+(?=(?:from|where|group by|order by|left join|inner join|join)\b)", "\n", s)).split("\n")]
+    return "\n".join(l for l in difflib.unified_diff(split(before), split(after), lineterm="", n=0)
+                     if not l.startswith(("---", "+++", "@@")))
+
+
+def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Session, history: bool = False,
+                  open_world: bool = False) -> list[ToolSpec]:
     """The checker as tools the model calls, and as rules it cannot skip.
 
     The model is told to check before it tries and to try before it submits. Being told is not the
@@ -201,6 +264,12 @@ def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Sess
         session.tries += 1
         out = rehearse(wh, fix_target, clean, symptom)
         left = MAX_TRIES - session.tries
+        if not out["tables_changed"]:
+            # SQL that builds exactly the tables the deployed SQL builds is not a fix, whatever it says it
+            # corrects. Without this, a rewrite of a procedure that was never wrong passes the rehearsal.
+            session.no_ops += 1
+            return (f"not a fix: this SQL builds exactly the same tables as the SQL deployed now, so it corrects nothing. "
+                    f"Either the fault is somewhere else or there is no fault in the SQL. {left} tries left.")
         if out["functional"] and out["integrity"]:
             session.verified.append((fix_target, clean))
             session.reasons[(fix_target, clean)] = reason.strip()
@@ -218,11 +287,44 @@ def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Sess
             refuse("only a fix that try_fix verified can be submitted, with the same node and the same SQL")
         return f"recorded: replace the SQL of {fix_target}"
 
+    def recent_changes() -> str:
+        session.asked_changes = True
+        ds = wh.deploys_since_good()
+        if not ds:
+            return "no procedure has been deployed since the last good run"
+        return "\n\n".join(f"{d['node']} was deployed:\n{_diff(d['before'], d['after'])}" for d in ds)
+
+    def check_sources() -> str:
+        session.asked_sources = True
+        bad = observe_sources(wh)
+        if not bad:
+            return ("every source table has the rows, keys, nulls and dates it had on the last good run. These checks "
+                    "look at shape, not values: a value in the wrong unit would not show here.")
+        return "; ".join(f"raw.{t}: {', '.join(said)}" for t, said in bad.items())
+
+    def close_without_fix(kind: str, source_table: str = "", reason: str = "") -> str:
+        if not (session.asked_where and session.asked_sources):
+            refuse("call where_checks_fail and check_sources before closing an incident without a fix")
+        table = source_table.lower().removeprefix("raw.")
+        if kind == "source_data" and table not in RAW_TABLES:
+            raise ValueError(f"name the source table that is bad: one of {', '.join(RAW_TABLES)}")
+        session.closed = {"kind": kind, "source_table": table if kind == "source_data" else "", "reason": reason.strip()}
+        return "recorded: no SQL change" + (f"; raw.{table} goes to its owner" if kind == "source_data" else "")
+
     class NoArgs(BaseModel):
         pass
 
     read = [t for t in read_tools(wh, dag, incident) if t.name != TERMINAL]
-    return read + [
+    extra = []
+    if history:
+        extra.append(ToolSpec("recent_changes", "The SQL deployed since the last good run, as a diff per procedure.",
+                              NoArgs, recent_changes))
+    if open_world:
+        extra += [ToolSpec("check_sources", "Check the source tables the pipeline reads against the last good run: "
+                           "rows, duplicate keys, nulls, latest date. Call this first, with where_checks_fail.", NoArgs, check_sources),
+                  ToolSpec(CLOSE, "End the incident with no SQL change: a source table arrived bad, or nothing is wrong.",
+                           Close, close_without_fix)]
+    return read + extra + [
         ToolSpec("where_checks_fail", "Where the health checks first fail upstream of the report, or that they fail "
                  "nowhere. Call this first.", NoArgs, where_checks_fail),
         ToolSpec("check_node", "Check one node as the cause against the health checks: supported, contradicted or "
@@ -234,13 +336,20 @@ def checked_tools(wh: Warehouse, dag: PipelineDAG, incident: dict, session: Sess
     ]
 
 
-def draft_checked(wh: Warehouse, dag: PipelineDAG, incident: dict, model: ChatModel,
-                  max_steps: int = 26) -> tuple[Investigation, str | None, Session]:
+def draft_checked(wh: Warehouse, dag: PipelineDAG, incident: dict, model: ChatModel, max_steps: int = 26,
+                  history: bool = False, open_world: bool = False) -> tuple[Investigation, str | None, Session]:
+    """`history` adds the deploy history as a tool. `open_world` stops assuming the SQL is at fault: the
+    model also gets the source checks and a way to end with no fix, and `session.closed` says if it did."""
     session = Session()
     task = (f"Incident {incident.get('id')}: {incident.get('symptom')}. "
-            "Find the procedure whose SQL is wrong, verify a fix for it, and submit it.")
-    inv = investigate(incident, dag, None, model, max_steps=max_steps, specs=checked_tools(wh, dag, incident, session),
-                      instructions=CHECKED_INSTRUCTIONS, task_text=task)
+            + ("Find out what is wrong, if anything, and end the incident the right way." if open_world else
+               "Find the procedure whose SQL is wrong, verify a fix for it, and submit it."))
+    inv = investigate(incident, dag, None, model, max_steps=max_steps,
+                      specs=checked_tools(wh, dag, incident, session, history, open_world),
+                      instructions=(OPEN_INSTRUCTIONS if open_world else CHECKED_INSTRUCTIONS) + (HISTORY_NOTE if history else ""),
+                      task_text=task, also_ends=(CLOSE,) if open_world else (), nudge=NUDGE if open_world else None)
+    if inv.closed:
+        return inv, None, session
     if inv.submitted:
         return inv, validate(wh, dag, inv.fix_target, inv.steps[-1]["args"]["sql"]), session
     if session.verified:
