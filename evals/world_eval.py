@@ -52,7 +52,7 @@ def run_model(model, out: Path, history: bool = False, only: list[str] | None = 
         todo = [c for c in todo if c["id"] in only]
     res = {"model": getattr(model, "model", "?"), "host": getattr(model, "base_url", "").split("//")[-1].split("/")[0] or "?",
            "mode": "open world: a fix, a bad source, or nothing wrong" + ("; with the deploy history as a tool" if history else ""),
-           "sample": sample, "seed": seed if sample else None, "rows": []}
+           "ids_hidden_from_model": True, "sample": sample, "seed": seed if sample else None, "rows": []}
     for n, c in enumerate(todo, 1):
         print(f"  {c['id']} ...", file=sys.stderr, flush=True)
         inc = as_seen(stage(wh, c), n)      # the model never sees the case id
